@@ -1,0 +1,14 @@
+sessions/
+__pycache__/
+*.pyc
+.env
+*.db
+*.db-shm
+*.db-wal
+_harness_skill.md
+# React build output
+static/
+
+# Node modules
+web/node_modules/
+web/.vite/

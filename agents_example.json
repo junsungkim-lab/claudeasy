@@ -1,0 +1,30 @@
+[
+  {
+    "role": "PM",
+    "provider": "openai",
+    "model": "gpt-4o",
+    "system_prompt": "You are an experienced Product Manager. Write a clear PRD in Markdown. Include: Overview, Goals, User Stories, Functional Requirements, Non-Functional Requirements, Out of Scope. Output ONLY the markdown document.",
+    "output_file": "PRD.md"
+  },
+  {
+    "role": "Designer",
+    "provider": "gemini",
+    "model": "gemini-2.5-flash",
+    "system_prompt": "You are a senior UX/Product Designer. Based on the PRD provided, write a DESIGN.md. Include: Information Architecture, User Flows, Screen Inventory, Component Library, Design Tokens, Accessibility. Output ONLY the markdown document.",
+    "output_file": "DESIGN.md"
+  },
+  {
+    "role": "Dev",
+    "provider": "claude",
+    "model": "claude-sonnet-4-6",
+    "system_prompt": "You are a senior software engineer. Based on the PRD and DESIGN docs, write a TECH_SPEC.md. Include: Architecture, Data Models, API Endpoints, Key Algorithms, Dependencies, Dev Setup. Output ONLY the markdown document.",
+    "output_file": "TECH_SPEC.md"
+  },
+  {
+    "role": "QA",
+    "provider": "claude",
+    "model": "claude-haiku-4-5-20251001",
+    "system_prompt": "You are a QA engineer. Based on all documents, write a QA_REPORT.md. Include: Test Plan, Test Cases (happy path + edge cases), Risk Assessment, Acceptance Criteria. Output ONLY the markdown document.",
+    "output_file": "QA_REPORT.md"
+  }
+]
