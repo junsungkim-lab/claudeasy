@@ -1,122 +1,131 @@
-import { Loader2 } from "lucide-react";
-import { TaskCard } from "./task-card";
+import { CheckCircle2, XCircle, Circle, Loader2, AlertCircle } from "lucide-react";
+import { useUIStore } from "@/stores/ui-store";
 import { cn } from "@/lib/utils";
 import type { Card } from "@/api/client";
 
-interface ColumnConfig {
-  key: string;
-  label: string;
-  statuses: string[];
-  headerBg: string;
-  headerText: string;
-  dotColor: string;
-  emptyText: string;
-}
-
-const COLUMNS: ColumnConfig[] = [
-  {
-    key: "backlog",
-    label: "대기",
-    statuses: ["backlog"],
-    headerBg: "bg-zinc-800/60",
-    headerText: "text-zinc-300",
-    dotColor: "bg-zinc-500",
-    emptyText: "대기 중인 카드 없음",
-  },
-  {
-    key: "in_progress",
-    label: "진행 중",
-    statuses: ["in_progress", "awaiting_approval"],
-    headerBg: "bg-blue-950/60",
-    headerText: "text-blue-300",
-    dotColor: "bg-blue-400 animate-pulse",
-    emptyText: "진행 중인 카드 없음",
-  },
-  {
-    key: "done",
-    label: "완료",
-    statuses: ["done"],
-    headerBg: "bg-emerald-950/60",
-    headerText: "text-emerald-300",
-    dotColor: "bg-emerald-400",
-    emptyText: "완료된 카드 없음",
-  },
-  {
-    key: "error",
-    label: "오류 / 거절",
-    statuses: ["error", "rejected"],
-    headerBg: "bg-red-950/60",
-    headerText: "text-red-300",
-    dotColor: "bg-red-400",
-    emptyText: "오류 없음",
-  },
-];
+const STATUS_CONFIG = {
+  done: { icon: CheckCircle2, color: "text-emerald-400", dot: "bg-emerald-400", label: "완료" },
+  error: { icon: XCircle, color: "text-red-400", dot: "bg-red-400", label: "오류" },
+  in_progress: { icon: Loader2, color: "text-blue-400", dot: "bg-blue-400", label: "실행 중", spin: true },
+  awaiting_approval: { icon: AlertCircle, color: "text-amber-400", dot: "bg-amber-400", label: "승인 대기" },
+  rejected: { icon: XCircle, color: "text-zinc-500", dot: "bg-zinc-600", label: "거절됨" },
+  backlog: { icon: Circle, color: "text-zinc-600", dot: "bg-zinc-700", label: "대기" },
+};
 
 export function CardColumns({ cards }: { cards: Card[] }) {
-  const runningCount = cards.filter(
-    (c) => c.status === "in_progress" || c.status === "awaiting_approval"
-  ).length;
-  const doneCount = cards.filter((c) => c.status === "done").length;
+  const { setActiveCard } = useUIStore();
+  const done = cards.filter(c => c.status === "done").length;
 
   return (
-    <div className="flex flex-col h-full">
-      {/* 진행 상황 요약 바 */}
-      {cards.length > 0 && (
-        <div className="px-5 py-2.5 border-b border-[--color-border] bg-[--color-card] flex items-center gap-5">
-          <div className="flex items-center gap-2 flex-1 max-w-xs">
-            <div className="h-1.5 bg-[--color-muted] rounded-full flex-1 overflow-hidden">
+    <div className="h-full overflow-y-auto bg-gray-50">
+      <div className="max-w-2xl mx-auto px-6 py-6">
+        {/* Progress header */}
+        {cards.length > 0 && (
+          <div className="flex items-center justify-between gap-3 mb-8">
+            <span className="text-[12px] text-gray-500 font-medium">
+              {done} / {cards.length} 완료
+            </span>
+            <div className="flex-1 h-px bg-gray-200 relative overflow-hidden rounded-full">
               <div
-                className="h-full bg-emerald-500 rounded-full transition-all duration-700"
-                style={{ width: `${(doneCount / cards.length) * 100}%` }}
+                className="absolute inset-y-0 left-0 bg-emerald-500 transition-all duration-500"
+                style={{ width: `${cards.length ? (done / cards.length) * 100 : 0}%` }}
               />
             </div>
-            <span className="text-[10px] text-[--color-muted-foreground] shrink-0 tabular-nums">
-              {doneCount}/{cards.length} 완료
+            <span className="text-[12px] text-gray-500 font-medium">
+              {cards.length ? Math.round((done / cards.length) * 100) : 0}%
             </span>
           </div>
-          {runningCount > 0 && (
-            <div className="flex items-center gap-1.5 text-[11px] text-blue-400 font-medium">
-              <Loader2 size={11} className="animate-spin" />
-              {runningCount}개 실행 중
-            </div>
+        )}
+
+        {/* Pipeline trace list */}
+        <div className="relative">
+          {/* Vertical connecting line */}
+          {cards.length > 0 && (
+            <div className="absolute left-[11px] top-3 bottom-3 w-px bg-gray-200" />
           )}
-        </div>
-      )}
 
-      {/* 칸반 칼럼 */}
-      <div className="flex gap-4 flex-1 px-5 py-5 overflow-x-auto overflow-y-hidden">
-        {COLUMNS.map((col) => {
-          const colCards = cards.filter((c) => col.statuses.includes(c.status));
+          <div className="space-y-1">
+            {cards.map((card) => {
+              const cfg = STATUS_CONFIG[card.status as keyof typeof STATUS_CONFIG] ?? STATUS_CONFIG.backlog;
+              const Icon = cfg.icon;
+              const isRunning = card.status === "in_progress";
 
-          return (
-            <div key={col.key} className="flex flex-col w-64 shrink-0">
-              {/* 칼럼 헤더 */}
-              <div className={cn("flex items-center gap-2 mb-3 px-3 py-2 rounded-lg", col.headerBg)}>
-                <div className={cn("w-2 h-2 rounded-full shrink-0", col.dotColor)} />
-                <span className={cn("text-xs font-semibold flex-1", col.headerText)}>
-                  {col.label}
-                </span>
-                <span className="text-[10px] font-medium text-[--color-muted-foreground] bg-black/30 rounded-full px-2 py-0.5">
-                  {colCards.length}
-                </span>
-              </div>
+              return (
+                <button
+                  key={card.id}
+                  onClick={() => setActiveCard(card.id)}
+                  className={cn(
+                    "w-full text-left flex items-start gap-3 px-3 py-3 rounded-lg transition-all duration-150 group",
+                    "hover:bg-white/[0.03]",
+                    isRunning && "bg-blue-500/[0.04] border border-blue-500/20",
+                    !isRunning && "border border-transparent",
+                    card.status === "done" && "opacity-75 hover:opacity-100",
+                    card.status === "rejected" && "opacity-40 hover:opacity-60"
+                  )}
+                >
+                  {/* Status icon */}
+                  <div className="mt-[3px] relative z-10 shrink-0">
+                    <Icon
+                      size={14}
+                      className={cn(cfg.color, (cfg as any).spin && "animate-spin")}
+                    />
+                  </div>
 
-              {/* 카드 목록 */}
-              <div className="flex flex-col gap-2 flex-1 overflow-y-auto min-h-[80px]">
-                {colCards.map((card) => (
-                  <TaskCard key={card.id} card={card} />
-                ))}
-                {colCards.length === 0 && (
-                  <div className="flex items-center justify-center flex-1 min-h-[80px] border border-dashed border-[--color-border] rounded-lg">
-                    <span className="text-[10px] text-[--color-muted-foreground]/50">
-                      {col.emptyText}
+                  {/* Content */}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span
+                        className={cn(
+                          "text-[13px] font-medium leading-5 truncate",
+                          card.status === "done"
+                            ? "text-gray-900"
+                            : card.status === "error"
+                            ? "text-red-300"
+                            : card.status === "in_progress"
+                            ? "text-blue-200"
+                            : "text-gray-500"
+                        )}
+                      >
+                        {card.title}
+                      </span>
+                      {card.agent_role && (
+                        <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-sm bg-indigo-500/15 text-indigo-400 font-medium">
+                          {card.agent_role}
+                        </span>
+                      )}
+                    </div>
+                    {card.output && card.status === "done" && (
+                      <p className="mt-0.5 text-[11px] text-gray-500 line-clamp-1 font-mono">
+                        {card.output.replace(/[#*`]/g, "").slice(0, 80)}
+                      </p>
+                    )}
+                    {isRunning && (
+                      <p className="mt-0.5 text-[11px] text-blue-400/70 font-mono">실행 중...</p>
+                    )}
+                  </div>
+
+                  {/* Right side */}
+                  <div className="shrink-0 flex items-center gap-2">
+                    <span className={cn("text-[10px] font-medium", cfg.color)}>
+                      {cfg.label}
+                    </span>
+                    <span className="text-[10px] text-gray-500 opacity-0 group-hover:opacity-100 transition-opacity">
+                      →
                     </span>
                   </div>
-                )}
+                </button>
+              );
+            })}
+
+            {cards.length === 0 && (
+              <div className="flex items-center justify-center py-12">
+                <span className="text-[12px] text-gray-500">
+                  카드가 없습니다
+                </span>
               </div>
-            </div>
-          );
-        })}
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );

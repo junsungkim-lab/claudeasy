@@ -30,16 +30,16 @@ export function Drawer({ open, onClose, title, children, className }: DrawerProp
       )}
       <div
         className={cn(
-          "fixed top-0 right-0 z-50 h-full w-[480px] max-w-full bg-[--color-card] border-l border-[--color-border] shadow-2xl transition-transform duration-200",
+          "fixed top-0 right-0 z-50 h-full w-[480px] max-w-full bg-white border-l border-gray-200 shadow-2xl transition-transform duration-200",
           open ? "translate-x-0" : "translate-x-full",
           className
         )}
       >
-        <div className="flex items-center justify-between p-4 border-b border-[--color-border]">
-          <h2 className="text-sm font-semibold text-[--color-foreground] truncate">{title}</h2>
+        <div className="flex items-center justify-between p-4 border-b border-gray-200">
+          <h2 className="text-sm font-semibold text-gray-900 truncate">{title}</h2>
           <button
             onClick={onClose}
-            className="ml-2 shrink-0 text-[--color-muted-foreground] hover:text-[--color-foreground] transition-colors"
+            className="ml-2 shrink-0 text-gray-500 hover:text-gray-900 transition-colors"
           >
             <X size={16} />
           </button>

@@ -26,7 +26,7 @@ export function HistoryDrawer() {
       <div className="p-4">
         {isLoading && (
           <div className="flex items-center justify-center py-12">
-            <Loader2 size={18} className="animate-spin text-[--color-muted-foreground]" />
+            <Loader2 size={18} className="animate-spin text-gray-500" />
           </div>
         )}
         {error && (

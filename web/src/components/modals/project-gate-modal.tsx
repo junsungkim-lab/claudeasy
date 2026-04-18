@@ -43,7 +43,7 @@ export function ProjectGateModal() {
       className="max-w-sm"
     >
       <div className="p-4 space-y-3">
-        <p className="text-xs text-[--color-muted-foreground]">
+        <p className="text-xs text-gray-500">
           코드 생성을 위해 프로젝트 경로가 필요합니다.
         </p>
 
@@ -53,10 +53,10 @@ export function ProjectGateModal() {
               <button
                 key={p.path}
                 onClick={() => handleSelectProject(p.path)}
-                className="w-full flex items-center gap-2 px-3 py-2 rounded-md text-left border border-[--color-border] hover:bg-[--color-accent] transition-colors"
+                className="w-full flex items-center gap-2 px-3 py-2 rounded-md text-left border border-gray-200 hover:bg-gray-100 transition-colors"
               >
-                <FolderOpen size={13} className="text-[--color-muted-foreground]" />
-                <span className="text-xs text-[--color-foreground] truncate">{p.name}</span>
+                <FolderOpen size={13} className="text-gray-500" />
+                <span className="text-xs text-gray-900 truncate">{p.name}</span>
               </button>
             ))}
           </div>

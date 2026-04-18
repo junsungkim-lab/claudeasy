@@ -67,7 +67,7 @@ export function TrendingModal() {
     >
       <div className="flex flex-col overflow-hidden">
         {/* Filters */}
-        <div className="flex gap-2 p-4 border-b border-[--color-border]">
+        <div className="flex gap-2 p-4 border-b border-gray-200">
           <Select
             value={language}
             onChange={(e) => setLanguage(e.target.value)}
@@ -98,7 +98,7 @@ export function TrendingModal() {
         <div className="overflow-y-auto flex-1 p-4 space-y-3" style={{ maxHeight: "60vh" }}>
           {isLoading && (
             <div className="flex items-center justify-center py-12">
-              <Loader2 size={20} className="animate-spin text-[--color-muted-foreground]" />
+              <Loader2 size={20} className="animate-spin text-gray-500" />
             </div>
           )}
           {error && (
@@ -113,12 +113,12 @@ export function TrendingModal() {
             return (
               <div
                 key={key}
-                className="border border-[--color-border] rounded-lg p-3 bg-[--color-card] space-y-2"
+                className="border border-gray-200 rounded-lg p-3 bg-white space-y-2"
               >
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <span className="text-sm font-medium text-[--color-foreground]">
+                      <span className="text-sm font-medium text-gray-900">
                         {repo.full_name}
                       </span>
                       {repo.language && (
@@ -126,7 +126,7 @@ export function TrendingModal() {
                       )}
                     </div>
                     {repo.description && (
-                      <p className="text-xs text-[--color-muted-foreground] mt-0.5 line-clamp-2">
+                      <p className="text-xs text-gray-500 mt-0.5 line-clamp-2">
                         {repo.description}
                       </p>
                     )}
@@ -135,7 +135,7 @@ export function TrendingModal() {
                         <Star size={10} /> {repo.stars.toLocaleString()}
                       </span>
                       {repo.stars_period > 0 && (
-                        <span className="text-[10px] text-[--color-muted-foreground]">
+                        <span className="text-[10px] text-gray-500">
                           +{repo.stars_period} {since === "daily" ? "오늘" : since === "weekly" ? "이번 주" : "이번 달"}
                         </span>
                       )}
@@ -156,7 +156,7 @@ export function TrendingModal() {
                       href={repo.url}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="inline-flex items-center justify-center h-7 w-7 rounded-md border border-[--color-border] text-[--color-muted-foreground] hover:text-[--color-foreground] hover:bg-[--color-accent] transition-colors"
+                      className="inline-flex items-center justify-center h-7 w-7 rounded-md border border-gray-200 text-gray-500 hover:text-gray-900 hover:bg-gray-100 transition-colors"
                     >
                       <ExternalLink size={12} />
                     </a>
@@ -164,8 +164,8 @@ export function TrendingModal() {
                 </div>
 
                 {analysisOutput && (
-                  <div className="border-t border-[--color-border] pt-2 space-y-2">
-                    <div className="prose-output bg-[--color-background] rounded-md p-2.5 border border-[--color-border] max-h-48 overflow-y-auto text-xs">
+                  <div className="border-t border-gray-200 pt-2 space-y-2">
+                    <div className="prose-output bg-gray-50 rounded-md p-2.5 border border-gray-200 max-h-48 overflow-y-auto text-xs">
                       <ReactMarkdown>{analysisOutput}</ReactMarkdown>
                     </div>
                     {isDone && (

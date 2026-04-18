@@ -1,4 +1,4 @@
-import { Clock, Trash2, ChevronDown } from "lucide-react";
+import { Clock, Trash2, GitBranch } from "lucide-react";
 import { useDeleteBoard } from "@/hooks/queries/use-boards";
 import { useUIStore } from "@/stores/ui-store";
 import { Button } from "@/components/ui/button";
@@ -20,54 +20,58 @@ export function BoardHeader({ board }: { board: Board }) {
   };
 
   return (
-    <div className="border-b border-[--color-border] bg-[--color-card] px-5 py-3">
-      <div className="flex items-start justify-between gap-3">
+    <div className="border-b border-gray-200 bg-white px-5 py-4">
+      <div className="flex items-center justify-between gap-3 mb-3">
         <div className="min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <h1 className="text-sm font-semibold text-[--color-foreground] truncate">
-              {board.name}
-            </h1>
-            {board.project_path && (
-              <Badge variant="secondary" className="text-[10px]">
-                {projectName(board.project_path)}
-              </Badge>
-            )}
-            {board.cron_expr && (
-              <Badge variant="default" className="text-[10px]">
-                <Clock size={9} className="mr-0.5" />
-                {board.cron_expr}
-              </Badge>
-            )}
-          </div>
-          {board.description && board.description.trim() !== board.name.trim() && (
-            <p className="text-xs text-[--color-muted-foreground] mt-0.5 truncate">
-              {board.description}
-            </p>
-          )}
+          <h1 className="text-[15px] font-semibold text-gray-900 truncate">
+            {board.name}
+          </h1>
         </div>
 
-        <div className="flex items-center gap-1.5 shrink-0">
+        <div className="flex items-center gap-2 shrink-0">
+          {board.github_repo && (
+            <a
+              href={`https://github.com/${board.github_repo}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-sm bg-gray-100 text-gray-500 hover:text-gray-900 transition-colors font-mono"
+            >
+              <GitBranch size={9} />
+              {board.github_repo}
+            </a>
+          )}
+          {board.cron_expr && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded-sm bg-gray-100 text-gray-500 font-mono">
+              {board.cron_expr}
+            </span>
+          )}
+          {board.project_path && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded-sm bg-gray-100 text-gray-500">
+              {projectName(board.project_path)}
+            </span>
+          )}
           <Button
             size="icon"
             variant="ghost"
+            className="text-gray-500 hover:text-gray-900 h-7 w-7"
             onClick={() => openScheduleModal(board.id)}
-            title="스케줄 설정"
+            title="Schedule"
           >
-            <Clock size={14} />
+            <Clock size={13} />
           </Button>
           <Button
             size="icon"
             variant="ghost"
+            className="text-gray-500 hover:text-red-400 h-7 w-7"
             onClick={handleDelete}
-            title="보드 삭제"
-            className="text-[--color-muted-foreground] hover:text-red-400"
+            title="Delete"
           >
-            <Trash2 size={14} />
+            <Trash2 size={13} />
           </Button>
         </div>
       </div>
 
-      <div className="mt-2">
+      <div>
         <RunSelector boardId={board.id} />
       </div>
     </div>

@@ -60,6 +60,11 @@ def init_db():
             parent_id  INTEGER REFERENCES feedback(id),
             created_at TEXT DEFAULT (datetime('now'))
         );
+
+        CREATE TABLE IF NOT EXISTS settings (
+            key   TEXT PRIMARY KEY,
+            value TEXT
+        );
         """)
 
         # 기존 DB 마이그레이션 (컬럼 누락 시 추가)
@@ -85,6 +90,18 @@ def _migrate(conn):
         # 피드백 스레딩
         "ALTER TABLE feedback ADD COLUMN author TEXT DEFAULT 'user'",
         "ALTER TABLE feedback ADD COLUMN parent_id INTEGER",
+        "ALTER TABLE cards ADD COLUMN artifact_type TEXT",
+        "ALTER TABLE cards ADD COLUMN run_command TEXT",
+        "ALTER TABLE cards ADD COLUMN artifact_port INTEGER",
+        "ALTER TABLE cards ADD COLUMN artifact_cwd TEXT",
+        "ALTER TABLE cards ADD COLUMN design_system TEXT",
+        # GitHub App 연동
+        "ALTER TABLE boards ADD COLUMN source_type TEXT DEFAULT 'local'",
+        "ALTER TABLE boards ADD COLUMN github_repo TEXT",
+        "ALTER TABLE boards ADD COLUMN github_installation_id INTEGER",
+        "ALTER TABLE boards ADD COLUMN github_ref TEXT DEFAULT 'main'",
+        "ALTER TABLE boards ADD COLUMN github_last_sha TEXT",
+        "ALTER TABLE boards ADD COLUMN workspace_path TEXT",
     ]
     for sql in migrations:
         try:
@@ -152,6 +169,22 @@ def update_board_project_path(board_id: int, project_path):
 def update_board_cron(board_id: int, cron_expr):
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute("UPDATE boards SET cron_expr=? WHERE id=?", (cron_expr, board_id))
+
+
+def update_board_github(board_id: int, github_repo: str, github_installation_id: int, github_ref: str = "main"):
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            "UPDATE boards SET source_type='github', github_repo=?, github_installation_id=?, github_ref=? WHERE id=?",
+            (github_repo, github_installation_id, github_ref, board_id),
+        )
+
+
+def save_board_workspace(board_id: int, workspace_path: str, sha: str = None):
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            "UPDATE boards SET workspace_path=?, github_last_sha=? WHERE id=?",
+            (workspace_path, sha, board_id),
+        )
 
 
 def get_boards():
@@ -247,11 +280,12 @@ def delete_run(run_id: int):
 # ── Cards ────────────────────────────────────────────────────────────────────
 
 def create_card(board_id: int, run_id: int, title: str,
-                description: str = "", agent_role: str = "") -> int:
+                description: str = "", agent_role: str = "",
+                design_system: str = None) -> int:
     with sqlite3.connect(DB_PATH) as conn:
         cur = conn.execute(
-            "INSERT INTO cards (board_id, run_id, title, description, agent_role) VALUES (?,?,?,?,?)",
-            (board_id, run_id, title, description, agent_role),
+            "INSERT INTO cards (board_id, run_id, title, description, agent_role, design_system) VALUES (?,?,?,?,?,?)",
+            (board_id, run_id, title, description, agent_role, design_system),
         )
         return cur.lastrowid
 
@@ -314,6 +348,15 @@ def get_card_session_id(card_id: int):
         return row[0] if row else None
 
 
+def update_card_artifact(card_id: int, artifact_type: str, run_command: str,
+                         artifact_port: int = None, artifact_cwd: str = None):
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            "UPDATE cards SET artifact_type=?, run_command=?, artifact_port=?, artifact_cwd=? WHERE id=?",
+            (artifact_type, run_command, artifact_port, artifact_cwd, card_id),
+        )
+
+
 # ── Agents ───────────────────────────────────────────────────────────────────
 
 AGENT_COLORS = ["#6366f1", "#ec4899", "#f59e0b", "#10b981", "#3b82f6", "#8b5cf6", "#ef4444"]
@@ -363,3 +406,19 @@ def get_feedback(card_id: int):
         return [dict(r) for r in conn.execute(
             "SELECT * FROM feedback WHERE card_id=? ORDER BY id", (card_id,)
         )]
+
+
+# ── Settings ──────────────────────────────────────────────────────────────────
+
+def get_setting(key: str):
+    with sqlite3.connect(DB_PATH) as conn:
+        row = conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+        return row[0] if row else None
+
+
+def set_setting(key: str, value: str):
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (key, value),
+        )

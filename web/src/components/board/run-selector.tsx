@@ -14,9 +14,10 @@ const RUN_STATUS_COLORS: Record<string, string> = {
 
 export function RunSelector({ boardId }: { boardId: number }) {
   const { selectedRunId, setSelectedRun } = useUIStore();
-  const { data: runs = [] } = useRuns(boardId);
+  const { data: allRuns = [] } = useRuns(boardId);
   const { mutate: rerun, isPending: rerunning } = useRerun();
 
+  const runs = allRuns.filter((r) => r.cards && r.cards.length > 0);
   const current = runs.find((r) => r.id === selectedRunId) ?? runs[0];
 
   if (runs.length === 0) return null;
@@ -27,7 +28,7 @@ export function RunSelector({ boardId }: { boardId: number }) {
         <select
           value={current?.id ?? ""}
           onChange={(e) => setSelectedRun(Number(e.target.value))}
-          className="appearance-none bg-[--color-muted] border border-[--color-border] rounded-md pl-3 pr-7 py-1 text-xs text-[--color-foreground] focus:outline-none focus:ring-1 focus:ring-[--color-ring] cursor-pointer"
+          className="appearance-none bg-gray-100 border border-gray-200 rounded-md pl-3 pr-7 py-1 text-xs text-gray-900 focus:outline-none focus:ring-1 focus:ring-indigo-400 cursor-pointer"
         >
           {runs.map((r) => (
             <option key={r.id} value={r.id}>
@@ -35,7 +36,7 @@ export function RunSelector({ boardId }: { boardId: number }) {
             </option>
           ))}
         </select>
-        <ChevronDown size={12} className="absolute right-2 top-1/2 -translate-y-1/2 text-[--color-muted-foreground] pointer-events-none" />
+        <ChevronDown size={12} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 pointer-events-none" />
       </div>
 
       {current && (

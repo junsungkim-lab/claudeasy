@@ -26,7 +26,8 @@ import agents_registry
 import scheduler as sched
 import session_logger
 import github_trending as gh_trending
-from harness import generate_harness, run_card, agents_exist_on_disk, _run_claude, update_project_memory, has_unanswered_questions, generate_auto_answers
+import github_oauth
+from harness import generate_harness, run_card, agents_exist_on_disk, _run_claude, update_project_memory, has_unanswered_questions, generate_auto_answers, parse_artifact
 
 # ── 실시간 구독자 관리 ───────────────────────────────────────────────────────
 _board_subs: dict[int, set] = {}        # board_id → set[WebSocket]
@@ -44,6 +45,9 @@ _approval_responses: dict[int, dict] = {}           # card_id → {action, messa
 
 # ── 자동 답변 오케스트레이터 ─────────────────────────────────────────────────
 _auto_answer_counts: dict[int, int] = {}  # card_id → 자동 답변 횟수 (루프 방지)
+
+# ── 산출물 프로세스 레지스트리 ────────────────────────────────────────────────
+_artifact_procs: dict[int, asyncio.subprocess.Process] = {}  # card_id → Process
 
 
 async def _board_emit(board_id: int, event: dict):
@@ -90,9 +94,12 @@ async def lifespan(app: FastAPI):
     _recover_stuck_states()        # 서버 재시작 시 중단된 상태 복구
     agents_registry.get_index()   # 서버 시작 시 에이전트 인덱스 미리 로드
     sched.load_boards()
-    sched.scheduler.start()
     yield
-    sched.scheduler.shutdown(wait=False)
+    for proc in list(_artifact_procs.values()):
+        try:
+            proc.kill()
+        except Exception:
+            pass
 
 
 def _recover_stuck_states():
@@ -192,6 +199,75 @@ async def sync_agents():
     return {"ok": success, "count": len(idx)}
 
 
+# ── GitHub OAuth ──────────────────────────────────────────────────────────────
+
+@app.get("/api/github/status")
+async def github_status():
+    user = github_oauth.get_github_user()
+    return {
+        "configured": github_oauth.is_configured(),
+        "connected": github_oauth.is_connected(),
+        "user": user,
+    }
+
+
+@app.post("/api/github/auth/start")
+async def github_auth_start():
+    if not github_oauth.is_configured():
+        return {"error": "GITHUB_CLIENT_ID가 설정되지 않았습니다."}
+    try:
+        return await github_oauth.start_device_flow()
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/api/github/auth/poll")
+async def github_auth_poll(body: dict):
+    device_code = body.get("device_code")
+    interval = body.get("interval", 5)
+    if not device_code:
+        return {"error": "device_code 필요"}
+    try:
+        token = await github_oauth.poll_device_flow(device_code, interval)
+        if token:
+            user = github_oauth.get_github_user()
+            return {"ok": True, "user": user}
+        return {"ok": False, "pending": True}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.delete("/api/github/auth")
+async def github_auth_disconnect():
+    github_oauth.disconnect()
+    return {"ok": True}
+
+
+@app.get("/api/github/repos")
+async def github_repos():
+    if not github_oauth.is_connected():
+        return {"error": "GitHub 미연결"}
+    try:
+        return await github_oauth.list_repos()
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/api/boards/{board_id}/github/sync")
+async def github_sync(board_id: int):
+    board = db.get_board(board_id)
+    if not board or not board.get("github_repo"):
+        return {"error": "GitHub repo가 연결되지 않은 보드입니다."}
+    try:
+        owner, repo = board["github_repo"].split("/", 1)
+        dest = github_oauth.workspace_for_board(board_id)
+        sha = await github_oauth.clone_or_pull(owner, repo, board.get("github_ref") or "main", dest)
+        db.save_board_workspace(board_id, str(dest), sha)
+        return {"ok": True, "workspace": str(dest), "sha": sha}
+    except Exception as e:
+        return {"error": str(e)}
+
+
 # ── Projects ─────────────────────────────────────────────────────────────────
 
 @app.get("/api/projects")
@@ -245,12 +321,33 @@ async def list_boards():
     return boards
 
 
+@app.get("/api/boards/scheduled")
+async def list_scheduled_boards():
+    boards = db.get_boards()
+    result = []
+    for b in [b for b in boards if b.get("cron_expr")]:
+        result.append({
+            "id": b["id"],
+            "name": b["name"],
+            "cron_expr": b["cron_expr"],
+            "status": b.get("status"),
+            "next_run_at": sched.get_next_run_time(b["id"]),
+            "paused": sched.is_paused(b["id"]),
+        })
+    return result
+
+
 @app.post("/api/boards")
 async def create_board(body: dict):
-    user_request   = body.get("request", "").strip()
-    use_tavily     = body.get("use_tavily", False)
-    approval_mode  = body.get("approval_mode", "auto")
-    project_path   = body.get("project_path") or None  # None이면 HOME
+    user_request        = body.get("request", "").strip()
+    use_tavily          = body.get("use_tavily", False)
+    approval_mode       = body.get("approval_mode", "auto")
+    project_path        = body.get("project_path") or None
+    source_type         = body.get("source_type", "local")
+    github_repo         = body.get("github_repo") or None
+    github_installation_id = body.get("github_installation_id") or None
+    github_ref          = body.get("github_ref", "main")
+
     if not user_request:
         return {"error": "내용을 입력하세요"}
 
@@ -261,10 +358,26 @@ async def create_board(body: dict):
         project_path=project_path,
         status="generating",
     )
-    run_id = db.create_run(board_id, trigger="manual")
 
-    asyncio.create_task(_run_pipeline(board_id, run_id, user_request, use_tavily, project_path))
-    return {"board_id": board_id, "run_id": run_id, **db.get_board(board_id)}
+    if source_type == "github" and github_repo and github_installation_id:
+        db.update_board_github(board_id, github_repo, int(github_installation_id), github_ref)
+        # 보드 생성 직후 clone — 백그라운드로
+        async def _clone_and_run():
+            board = db.get_board(board_id)
+            run_id = db.create_run(board_id, trigger="manual")
+            try:
+                resolved = await _resolve_board_workspace(board)
+                await _run_pipeline(board_id, run_id, user_request, use_tavily, str(resolved))
+            except Exception as exc:
+                db.update_run_status(run_id, "error")
+                db.update_board_status(board_id, "error")
+                logger.error("[create_board] github clone failed: %s", exc)
+        asyncio.create_task(_clone_and_run())
+    else:
+        run_id = db.create_run(board_id, trigger="manual")
+        asyncio.create_task(_run_pipeline(board_id, run_id, user_request, use_tavily, project_path))
+
+    return {"board_id": board_id, **db.get_board(board_id)}
 
 
 @app.post("/api/boards/{board_id}/runs")
@@ -366,9 +479,17 @@ async def trigger_now(board_id: int):
     if not board:
         return {"error": "not found"}
     run_id = db.create_run(board_id, trigger="cron")
-    asyncio.create_task(_run_pipeline(
-        board_id, run_id, board["description"], False, board.get("project_path")
-    ))
+
+    async def _trigger():
+        try:
+            workspace = await _resolve_board_workspace(board)
+            project_path = str(workspace) if workspace else None
+        except Exception as exc:
+            logger.error("[trigger_now] workspace resolve failed: %s", exc)
+            project_path = board.get("project_path")
+        await _run_pipeline(board_id, run_id, board["description"], False, project_path)
+
+    asyncio.create_task(_trigger())
     return {"board_id": board_id, "run_id": run_id}
 
 
@@ -536,6 +657,73 @@ async def get_slide_file(card_id: int, filename: str):
     return FileResponse(path, media_type="image/png")
 
 
+# ── 산출물 실행 / 중지 ──────────────────────────────────────────────────────────
+
+@app.post("/api/cards/{card_id}/run")
+async def run_artifact(card_id: int):
+    card = db.get_card(card_id)
+    if not card or not card.get("run_command"):
+        return {"error": "실행 가능한 산출물이 없습니다"}
+
+    # 이미 실행 중이면 중지 후 재실행
+    proc = _artifact_procs.get(card_id)
+    if proc and proc.returncode is None:
+        try:
+            proc.terminate()
+            await asyncio.wait_for(proc.wait(), timeout=3)
+        except Exception:
+            try:
+                proc.kill()
+                await proc.wait()
+            except Exception:
+                pass
+
+    cwd = card.get("artifact_cwd") or str(Path.home())
+    cmd = card["run_command"]
+    new_proc = await asyncio.create_subprocess_shell(
+        cmd,
+        cwd=cwd,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    _artifact_procs[card_id] = new_proc
+    port = card.get("artifact_port")
+    await _card_emit(card_id, {"type": "artifact_started", "pid": new_proc.pid, "port": port})
+    return {"pid": new_proc.pid, "port": port}
+
+
+@app.post("/api/cards/{card_id}/stop")
+async def stop_artifact(card_id: int):
+    proc = _artifact_procs.get(card_id)
+    if not proc or proc.returncode is not None:
+        return {"error": "실행 중인 프로세스가 없습니다"}
+    try:
+        proc.terminate()
+        await asyncio.wait_for(proc.wait(), timeout=5)
+    except Exception:
+        try:
+            proc.kill()
+            await proc.wait()
+        except Exception:
+            pass
+    _artifact_procs.pop(card_id, None)
+    await _card_emit(card_id, {"type": "artifact_stopped"})
+    return {"ok": True}
+
+
+@app.get("/api/cards/{card_id}/run-status")
+async def get_run_status(card_id: int):
+    proc = _artifact_procs.get(card_id)
+    running = proc is not None and proc.returncode is None
+    card = db.get_card(card_id)
+    return {
+        "running": running,
+        "pid": proc.pid if running else None,
+        "port": card.get("artifact_port") if card else None,
+        "artifact_type": card.get("artifact_type") if card else None,
+    }
+
+
 # ── Approval ──────────────────────────────────────────────────────────────────
 
 @app.post("/api/cards/{card_id}/approve")
@@ -630,6 +818,34 @@ async def ws_card(ws: WebSocket, card_id: int):
         pass
     finally:
         state["subs"].discard(ws)
+
+
+# ── GitHub 워크스페이스 해결 ──────────────────────────────────────────────────
+
+_workspace_locks: dict[int, asyncio.Lock] = {}
+
+
+async def _resolve_board_workspace(board: dict):
+    """github_repo가 있으면 clone/pull 후 워크스페이스 경로 반환.
+    없으면 project_path 그대로 반환 (None 포함).
+    """
+    if not board.get("github_repo"):
+        path = board.get("project_path") or board.get("workspace_path")
+        return Path(path) if path else None
+
+    board_id = board["id"]
+    if board_id not in _workspace_locks:
+        _workspace_locks[board_id] = asyncio.Lock()
+
+    async with _workspace_locks[board_id]:
+        owner, repo = board["github_repo"].split("/", 1)
+        ref = board.get("github_ref") or "main"
+        dest = github_oauth.workspace_for_board(board_id)
+
+        sha = await github_oauth.clone_or_pull(owner, repo, ref, dest)
+        db.save_board_workspace(board_id, str(dest), sha)
+        logger.info("[workspace] board_%d → %s (sha=%s)", board_id, dest, sha[:7] if sha else "?")
+        return dest
 
 
 # ── 백그라운드 파이프라인 ─────────────────────────────────────────────────────
@@ -728,7 +944,8 @@ async def _run_pipeline(board_id: int, run_id: int, user_request: str,
             if prev_run:
                 prev_cards = db.get_cards_for_run(prev_run["id"])
                 tasks = [
-                    {"title": c["title"], "description": c["description"], "agent": c["agent_role"]}
+                    {"title": c["title"], "description": c["description"], "agent": c["agent_role"],
+                     "design_system": c.get("design_system")}
                     for c in prev_cards if c["status"] != "rejected"
                 ]
             else:
@@ -741,7 +958,8 @@ async def _run_pipeline(board_id: int, run_id: int, user_request: str,
         # ── cards 생성 (run 레벨) ────────────────────────────────────────────
         card_ids = []
         for t in tasks:
-            cid = db.create_card(board_id, run_id, t.get("title", ""), t.get("description", ""), t.get("agent", ""))
+            cid = db.create_card(board_id, run_id, t.get("title", ""), t.get("description", ""),
+                                 t.get("agent", ""), t.get("design_system"))
             card_ids.append(cid)
 
         db.update_run_status(run_id, "ready")
@@ -843,20 +1061,34 @@ async def _run_pipeline(board_id: int, run_id: int, user_request: str,
                     session_id=db.get_card_session_id(card_id),
                     on_session_id=on_new_session,
                     project_path=project_path,
+                    design_system=task.get("design_system"),
                 )
                 db.update_card_status(card_id, "done")
                 db.set_agent_status(board_id, agent_name, "idle")
-                await _card_emit(card_id, {"type": "card_done"})
+                # artifact 파싱 → DB 저장
+                _final_card = db.get_card(card_id)
+                _artifact = parse_artifact(_final_card.get("output") or "")
+                if _artifact:
+                    db.update_card_artifact(
+                        card_id,
+                        _artifact["type"],
+                        _artifact["run_command"],
+                        _artifact.get("port"),
+                        _artifact.get("cwd"),
+                    )
+                await _card_emit(card_id, {"type": "card_done", "artifact": _artifact})
                 await _run_emit(run_id, {
                     "type": "card_update",
                     "card_id": card_id,
                     "status": "done",
+                    "artifact": _artifact,
                 })
                 await _board_emit(board_id, {
                     "type": "card_update",
                     "card_id": card_id,
                     "status": "done",
                     "run_id": run_id,
+                    "artifact": _artifact,
                 })
                 # 프로젝트 장기 기억 업데이트 (백그라운드)
                 if project_path:
@@ -905,6 +1137,10 @@ async def _run_pipeline(board_id: int, run_id: int, user_request: str,
         await _run_emit(run_id, {"type": "run_done"})
         await _board_emit(board_id, {"type": "board_done", "run_id": run_id})
 
+        # ── GitHub 자동 push ──────────────────────────────────────────────────
+        if project_path and github_oauth.is_connected():
+            asyncio.create_task(_github_push(board_id, board_name=user_request[:60], project_path=project_path))
+
         # ── 세션 히스토리 저장 ───────────────────────────────────────────────
         try:
             board_snap = db.get_board(board_id)
@@ -920,6 +1156,40 @@ async def _run_pipeline(board_id: int, run_id: int, user_request: str,
         db.update_board_status(board_id, "error")
         await _run_emit(run_id, {"type": "error", "text": str(e)})
         await _board_emit(board_id, {"type": "error", "text": str(e)})
+
+
+async def _github_push(board_id: int, board_name: str, project_path: str):
+    """파이프라인 완료 후 GitHub repo 생성 or 업데이트."""
+    try:
+        board = db.get_board(board_id)
+        dest = Path(project_path)
+
+        if not board.get("github_repo"):
+            # 신규 repo 생성
+            slug = github_oauth.repo_slug(board_name)
+            await _board_emit(board_id, {"type": "status", "text": f"📦 GitHub repo 생성 중: {slug}"})
+            repo_info = await github_oauth.create_repo(slug, description=board_name)
+            full_name = repo_info["full_name"]
+            db.update_board_github(board_id, full_name, None, "main")
+            await github_oauth.init_and_push(dest, repo_info, message=f"feat: {board_name}")
+            await _board_emit(board_id, {
+                "type": "github_pushed",
+                "repo": full_name,
+                "url": repo_info["html_url"],
+            })
+            logger.info("[github] 신규 repo push: %s", full_name)
+        else:
+            # 기존 repo에 변경사항 push
+            await github_oauth.commit_and_push(dest, message=f"update: {board_name}")
+            await _board_emit(board_id, {
+                "type": "github_pushed",
+                "repo": board["github_repo"],
+                "url": f"https://github.com/{board['github_repo']}",
+            })
+            logger.info("[github] 기존 repo push: %s", board["github_repo"])
+    except Exception as e:
+        logger.error("[github] push 실패: %s", e)
+        await _board_emit(board_id, {"type": "github_push_error", "text": str(e)})
 
 
 async def _rerun_card(card_id: int, card: dict, user_note: str = ""):
@@ -960,12 +1230,24 @@ async def _rerun_card(card_id: int, card: dict, user_note: str = ""):
             session_id=session_id,
             on_session_id=on_new_session,
             project_path=project_path,
+            design_system=card.get("design_system"),
         )
         db.update_card_status(card_id, "done")
         db.set_agent_status(board_id, agent_name, "idle")
-        await _card_emit(card_id, {"type": "card_done"})
-        await _run_emit(run_id, {"type": "card_update", "card_id": card_id, "status": "done"})
-        await _board_emit(board_id, {"type": "card_update", "card_id": card_id, "status": "done", "run_id": run_id})
+        # artifact 파싱 → DB 저장
+        _rerun_card_data = db.get_card(card_id)
+        _rerun_artifact = parse_artifact(_rerun_card_data.get("output") or "")
+        if _rerun_artifact:
+            db.update_card_artifact(
+                card_id,
+                _rerun_artifact["type"],
+                _rerun_artifact["run_command"],
+                _rerun_artifact.get("port"),
+                _rerun_artifact.get("cwd"),
+            )
+        await _card_emit(card_id, {"type": "card_done", "artifact": _rerun_artifact})
+        await _run_emit(run_id, {"type": "card_update", "card_id": card_id, "status": "done", "artifact": _rerun_artifact})
+        await _board_emit(board_id, {"type": "card_update", "card_id": card_id, "status": "done", "run_id": run_id, "artifact": _rerun_artifact})
         # 프로젝트 장기 기억 업데이트 (백그라운드)
         if project_path:
             final_card = db.get_card(card_id)
@@ -1034,7 +1316,7 @@ async def _try_auto_answer(
         # 스냅샷 저장 후 자동 재실행
         if output.strip():
             db.add_feedback(card_id, "output_snapshot", output)
-        db.add_feedback(card_id, "rerun", f"[자동 답변]\n{answers}")
+        db.add_feedback(card_id, "rerun", f"[자동 답변]\n{answers}", author="auto")
         db.clear_card_output(card_id)
         if card_id in _card_state:
             _card_state[card_id] = {"buffer": "", "subs": _card_state[card_id]["subs"], "done": False}

@@ -12,13 +12,13 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
       <button
         ref={ref}
         className={cn(
-          "inline-flex items-center justify-center gap-1.5 rounded-md font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[--color-ring]",
+          "inline-flex items-center justify-center gap-1.5 rounded-md font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400",
           {
-            "bg-[--color-primary] text-white hover:bg-indigo-500": variant === "default",
-            "bg-[--color-secondary] text-[--color-secondary-foreground] hover:bg-zinc-600": variant === "secondary",
-            "bg-[--color-destructive] text-white hover:bg-red-500": variant === "destructive",
-            "hover:bg-[--color-accent] hover:text-[--color-accent-foreground]": variant === "ghost",
-            "border border-[--color-border] hover:bg-[--color-accent]": variant === "outline",
+            "bg-indigo-500 text-white hover:bg-indigo-600": variant === "default",
+            "bg-gray-100 text-gray-700 hover:bg-gray-200": variant === "secondary",
+            "bg-red-500 text-white hover:bg-red-600": variant === "destructive",
+            "bg-transparent text-gray-600 hover:bg-gray-100 hover:text-gray-900": variant === "ghost",
+            "border border-gray-200 bg-white text-gray-700 hover:bg-gray-50": variant === "outline",
           },
           {
             "h-7 px-2.5 text-xs": size === "sm",

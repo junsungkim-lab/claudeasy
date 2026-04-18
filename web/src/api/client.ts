@@ -31,6 +31,31 @@ export interface Board {
   project_path: string | null;
   status: string;
   created_at: string;
+  source_type: "local" | "github";
+  github_repo: string | null;
+  github_ref: string | null;
+  workspace_path: string | null;
+}
+
+export interface GitHubStatus {
+  configured: boolean;
+  connected: boolean;
+  user: { login: string; avatar_url: string } | null;
+}
+
+export interface GitHubInstallation {
+  id: number;
+  account_login: string;
+  account_type: string;
+  account_avatar_url: string;
+}
+
+export interface GitHubRepo {
+  full_name: string;
+  name: string;
+  private: boolean;
+  default_branch: string;
+  description: string;
 }
 
 export interface Run {
@@ -54,12 +79,18 @@ export interface Card {
   output: string | null;
   created_at: string;
   updated_at: string;
+  artifact_type: "server" | "script" | null;
+  run_command: string | null;
+  artifact_port: number | null;
+  artifact_cwd: string | null;
+  design_system: string | null;
 }
 
 export interface Agent {
   name: string;
   description: string;
   harness: boolean;
+  source: "harness100" | "global";
 }
 
 export interface Feedback {

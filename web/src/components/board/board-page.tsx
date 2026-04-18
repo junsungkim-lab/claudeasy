@@ -46,18 +46,18 @@ export function BoardPage({ boardId }: BoardPageProps) {
   const hasCards = cards.length > 0;
 
   return (
-    <div className="h-screen flex flex-col bg-[--color-background]">
+    <div className="h-screen flex flex-col bg-gray-50">
       {/* 뒤로가기 바 */}
-      <div className="flex items-center gap-3 px-4 py-2 border-b border-[--color-border] bg-[--color-card] shrink-0">
+      <div className="flex items-center gap-3 px-4 py-2 border-b border-gray-200 bg-white shrink-0">
         <button
           onClick={() => history.back()}
-          className="flex items-center gap-1.5 text-xs text-[--color-muted-foreground] hover:text-[--color-foreground] transition-colors"
+          className="flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-900 transition-colors"
         >
           <ArrowLeft size={14} />
           뒤로
         </button>
         {board && (
-          <span className="text-xs text-[--color-muted-foreground] truncate max-w-xs">
+          <span className="text-xs text-gray-500 truncate max-w-xs">
             {board.name}
           </span>
         )}
@@ -69,7 +69,7 @@ export function BoardPage({ boardId }: BoardPageProps) {
       {/* 메인 콘텐츠 */}
       <div className="flex-1 overflow-hidden">
         {!board ? (
-          <div className="flex items-center justify-center h-full text-sm text-[--color-muted-foreground]">
+          <div className="flex items-center justify-center h-full text-sm text-gray-500">
             보드를 불러오는 중...
           </div>
         ) : isGenerating && !hasCards ? (
@@ -77,7 +77,7 @@ export function BoardPage({ boardId }: BoardPageProps) {
         ) : hasCards ? (
           <CardColumns cards={cards} />
         ) : (
-          <div className="flex items-center justify-center h-full text-sm text-[--color-muted-foreground]">
+          <div className="flex items-center justify-center h-full text-sm text-gray-500">
             카드 없음
           </div>
         )}

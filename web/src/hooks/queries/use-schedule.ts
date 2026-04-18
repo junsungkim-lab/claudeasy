@@ -1,6 +1,45 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/client";
 
+export interface ScheduledBoard {
+  id: number;
+  name: string;
+  cron_expr: string;
+  status: string;
+  next_run_at: string | null;
+  paused: boolean;
+}
+
+export function useScheduledBoards() {
+  return useQuery<ScheduledBoard[]>({
+    queryKey: ["boards-scheduled"],
+    queryFn: () => api("/api/boards/scheduled"),
+    refetchInterval: 30_000,
+  });
+}
+
+export function usePauseSchedule() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (boardId: number) =>
+      api(`/api/boards/${boardId}/schedule/pause`, { method: "POST" }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["boards-scheduled"] });
+    },
+  });
+}
+
+export function useResumeSchedule() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (boardId: number) =>
+      api(`/api/boards/${boardId}/schedule/resume`, { method: "POST" }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["boards-scheduled"] });
+    },
+  });
+}
+
 interface ScheduleInfo {
   cron_expr: string | null;
   approval_mode: "auto" | "manual";

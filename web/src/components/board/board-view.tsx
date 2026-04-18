@@ -45,10 +45,10 @@ export function BoardView() {
         <div className="flex-1 flex flex-col items-center justify-center p-8">
           <div className="w-full max-w-lg space-y-6">
             <div className="text-center">
-              <h2 className="text-base font-semibold text-[--color-foreground] mb-1">
+              <h2 className="text-base font-semibold text-gray-900 mb-1">
                 새 자동화 만들기
               </h2>
-              <p className="text-xs text-[--color-muted-foreground]">
+              <p className="text-xs text-gray-500">
                 좌측에서 보드를 선택하거나 아래에서 새 작업을 만드세요
               </p>
             </div>
@@ -77,13 +77,13 @@ export function BoardView() {
         ) : (
           /* 대기 중 (ready but no cards) */
           <div className="flex items-center justify-center h-full">
-            <p className="text-sm text-[--color-muted-foreground]">카드 없음</p>
+            <p className="text-sm text-gray-500">카드 없음</p>
           </div>
         )}
       </div>
 
       {/* 하단 새 보드 폼 */}
-      <div className="p-4 border-t border-[--color-border] bg-[--color-background]">
+      <div className="p-4 border-t border-gray-200 bg-gray-50">
         <NewBoardForm />
       </div>
     </div>

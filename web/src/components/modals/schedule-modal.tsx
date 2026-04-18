@@ -53,7 +53,7 @@ export function ScheduleModal() {
     >
       <div className="p-4 space-y-4">
         <div>
-          <label className="text-xs font-medium text-[--color-muted-foreground] mb-1.5 block">
+          <label className="text-xs font-medium text-gray-500 mb-1.5 block">
             Cron 표현식
           </label>
           <Input
@@ -66,7 +66,7 @@ export function ScheduleModal() {
               <button
                 key={p.value}
                 onClick={() => setCronExpr(p.value)}
-                className="text-[10px] px-2 py-0.5 rounded bg-[--color-muted] text-[--color-muted-foreground] hover:bg-[--color-accent] hover:text-[--color-foreground] transition-colors"
+                className="text-[10px] px-2 py-0.5 rounded bg-gray-100 text-gray-500 hover:bg-gray-100 hover:text-gray-900 transition-colors"
               >
                 {p.label}
               </button>
@@ -75,7 +75,7 @@ export function ScheduleModal() {
         </div>
 
         <div>
-          <label className="text-xs font-medium text-[--color-muted-foreground] mb-1.5 block">
+          <label className="text-xs font-medium text-gray-500 mb-1.5 block">
             실행 모드
           </label>
           <div className="flex gap-2">
@@ -85,8 +85,8 @@ export function ScheduleModal() {
                 onClick={() => setApprovalMode(m)}
                 className={`flex-1 py-1.5 text-xs rounded-md border transition-colors ${
                   approvalMode === m
-                    ? "border-[--color-primary] bg-indigo-500/10 text-indigo-400"
-                    : "border-[--color-border] text-[--color-muted-foreground] hover:bg-[--color-accent]"
+                    ? "border-indigo-500 bg-indigo-500/10 text-indigo-400"
+                    : "border-gray-200 text-gray-500 hover:bg-gray-100"
                 }`}
               >
                 {m === "auto" ? "자동 실행" : "수동 승인"}

@@ -4,3 +4,6 @@ httpx
 apscheduler
 python-dotenv
 playwright>=1.40.0
+PyJWT[crypto]
+cryptography
+croniter

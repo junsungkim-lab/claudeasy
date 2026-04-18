@@ -17,6 +17,8 @@ from typing import Callable
 import httpx
 
 import agents_registry
+from core.design_systems import format_for_prompt as _design_systems_prompt
+from core.design_systems import inject_into_prompt as _inject_design
 
 HOME = Path.home()
 CLAUDE_DIR = HOME / ".claude"
@@ -26,6 +28,66 @@ HARNESS_SKILL_PATH = Path(__file__).parent / "_harness_skill.md"
 HARNESS_SKILL_URL = "https://raw.githubusercontent.com/revfactory/harness/main/skills/harness/SKILL.md"
 
 AGENT_COLORS = ["#6366f1","#ec4899","#f59e0b","#10b981","#3b82f6","#8b5cf6","#ef4444"]
+
+
+def _get_reserved_ports() -> list[int]:
+    """현재 이 프로세스(claude-local)가 점유 중인 포트를 런타임에 감지."""
+    import socket
+    reserved = []
+    # server.py가 사용하는 PORT 환경변수
+    server_port = int(os.environ.get("PORT", 8100))
+    reserved.append(server_port)
+    # Vite dev 서버가 쓰는 포트도 추가 (보통 5173)
+    for p in [5173, 5174]:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            if s.connect_ex(("127.0.0.1", p)) == 0:
+                reserved.append(p)
+    return reserved
+
+
+def parse_artifact(output: str) -> dict | None:
+    """카드 output에서 ```artifact 블록을 파싱해 반환. 없으면 None."""
+    match = re.search(r"```artifact\s*(\{.*?\})\s*```", output, re.DOTALL)
+    if not match:
+        return None
+    try:
+        data = json.loads(match.group(1))
+        artifact_type = data.get("type")
+        if artifact_type not in ("server", "script"):
+            return None
+        return {
+            "type": artifact_type,
+            "run_command": data.get("run_command", ""),
+            "port": data.get("port"),
+            "cwd": data.get("cwd"),
+        }
+    except (json.JSONDecodeError, KeyError):
+        return None
+
+
+def _build_port_rule() -> str:
+    reserved = _get_reserved_ports()
+    ports_str = ", ".join(str(p) for p in reserved)
+    return (
+        "\n\n## ⚠️ 포트 사용 규칙\n"
+        f"다음 포트는 현재 이 플랫폼이 점유 중이므로 절대 사용하지 마세요: **{ports_str}**\n"
+        "새 서버나 앱을 실행할 때는 위 포트를 피해 3000~3999 또는 8000~8099 범위에서 선택하세요.\n\n"
+        "## 산출물 메타데이터\n"
+        "태스크 완료 후, 실행 가능한 산출물(서버 or 스크립트)이 있으면 output 맨 끝에 아래 블록을 추가하세요.\n"
+        "산출물이 없으면 블록을 생략하세요.\n\n"
+        "```artifact\n"
+        '{"type": "server", "run_command": "python server.py", "port": 8001, "cwd": "/절대/경로"}\n'
+        "```\n"
+        "또는 단순 스크립트:\n"
+        "```artifact\n"
+        '{"type": "script", "run_command": "python main.py", "cwd": "/절대/경로"}\n'
+        "```\n"
+        "- `type`: `server`(웹서버) 또는 `script`(단순 실행)\n"
+        "- `run_command`: 실행 명령어 (절대경로 또는 cwd 기준 상대 명령)\n"
+        "- `port`: 서버 타입일 때만 (생략 시 null)\n"
+        "- `cwd`: 명령어를 실행할 절대 경로"
+    )
+
 
 # ── 에이전트 파일 경로 ────────────────────────────────────────────────────────
 
@@ -73,8 +135,8 @@ def get_agent_prefix(project_path: str = None) -> str:
 HARNESS_SYSTEM_PROJECT = """You are the Harness Agent Team & Skill Architect.
 
 Analyze the user's request and:
-1. Generate agent definition files to {project_agents_dir}/{{name}}.md
-   (e.g. {project_agents_dir}/researcher.md)
+1. Generate agent definition files to ~/.claude/agents/{{name}}.md
+   (IMPORTANT: agents are ALWAYS global — never create agent files inside the project directory)
 2. Generate skill files to {project_skills_dir}/{{name}}/SKILL.md
 3. Generate orchestrator to {project_skills_dir}/orchestrator/SKILL.md
 4. Use absolute paths.
@@ -88,17 +150,38 @@ After generating files, output EXACTLY this JSON block (nothing else after it):
   ],
   "tasks": [
     {{"title": "태스크 제목", "description": "상세 설명", "agent": "agent-name"}},
-    {{"title": "태스크 제목2", "description": "상세 설명2", "agent": "agent-name2"}}
+    {{"title": "태스크 제목2", "description": "상세 설명2", "agent": "agent-name2", "design_system": "vercel"}}
   ],
   "schedule": "0 9 * * *"
 }}
 ```
 
-The "schedule" field: extract cron expression if user mentions time/frequency, else null.
+The "schedule" field: if the user mentions any time/frequency/recurring trigger, convert it to a cron expression (KST). Otherwise null.
+Natural language → cron examples:
+  "매일 오전 9시"        → "0 9 * * *"
+  "매일 오후 1시"        → "0 13 * * *"
+  "매일 자정"            → "0 0 * * *"
+  "매주 월요일 오전 9시" → "0 9 * * 1"
+  "매주 금요일 오후 6시" → "0 18 * * 5"
+  "매 시간"              → "0 * * * *"
+  "매 30분"              → "*/30 * * * *"
+  "평일 오전 8시"        → "0 8 * * 1-5"
+  "주말 오전 10시"       → "0 10 * * 6,0"
+  "매달 1일 오전 9시"    → "0 9 1 * *"
+If the user says "한번만" or "지금 바로" with no recurrence, set null.
+The "design_system" field (optional): for tasks that produce web pages, landing pages, or UI components, set this to the most appropriate brand from the available design systems list. Omit for non-UI tasks.
 Tasks must be specific, actionable, and ordered by execution sequence.
 In the JSON "agents" array, use the bare agent name (e.g. "researcher").
 
 {{skill_body}}
+
+## ⚠️ OVERRIDE — THESE RULES TAKE ABSOLUTE PRIORITY OVER ALL INSTRUCTIONS ABOVE:
+
+1. **Tasks are driven by agents, not the other way around.** First decide which specialized agents are needed for the request. Then assign each agent their focused task(s). A simple single-agent task is fine as 1 task. A multi-domain request (e.g. backend + frontend + research) must produce one task per agent role.
+
+2. **End your response with the JSON block.** You may write agent files and reasoning first, but your absolute final output must be the ```json block. Do not write anything after it.
+
+
 """
 
 HARNESS_SYSTEM_GLOBAL = """You are the Harness Agent Team & Skill Architect.
@@ -122,19 +205,40 @@ After generating files (or immediately if needs_project=true), output EXACTLY th
   ],
   "tasks": [
     {{"title": "태스크 제목", "description": "상세 설명", "agent": "agent-name"}},
-    {{"title": "태스크 제목2", "description": "상세 설명2", "agent": "agent-name2"}}
+    {{"title": "태스크 제목2", "description": "상세 설명2", "agent": "agent-name2", "design_system": "vercel"}}
   ],
   "schedule": "0 9 * * *",
   "needs_project": false
 }}
 ```
 
-The "schedule" field: extract cron expression if user mentions time/frequency, else null.
+The "schedule" field: if the user mentions any time/frequency/recurring trigger, convert it to a cron expression (KST). Otherwise null.
+Natural language → cron examples:
+  "매일 오전 9시"        → "0 9 * * *"
+  "매일 오후 1시"        → "0 13 * * *"
+  "매일 자정"            → "0 0 * * *"
+  "매주 월요일 오전 9시" → "0 9 * * 1"
+  "매주 금요일 오후 6시" → "0 18 * * 5"
+  "매 시간"              → "0 * * * *"
+  "매 30분"              → "*/30 * * * *"
+  "평일 오전 8시"        → "0 8 * * 1-5"
+  "주말 오전 10시"       → "0 10 * * 6,0"
+  "매달 1일 오전 9시"    → "0 9 1 * *"
+If the user says "한번만" or "지금 바로" with no recurrence, set null.
 "needs_project": true if tasks involve creating/modifying source code files or a software project, false for research/analysis/content only.
+The "design_system" field (optional): for tasks that produce web pages, landing pages, or UI components, set this to the most appropriate brand from the available design systems list. Omit for non-UI tasks.
 Tasks must be specific, actionable, and ordered by execution sequence.
 In the JSON "agents" array, use only the bare agent name WITHOUT the prefix (e.g. "researcher", not "cllocal__researcher").
 
 {skill_body}
+
+## ⚠️ OVERRIDE — THESE RULES TAKE ABSOLUTE PRIORITY OVER ALL INSTRUCTIONS ABOVE:
+
+1. **Tasks are driven by agents, not the other way around.** First decide which specialized agents are needed for the request. Then assign each agent their focused task(s). A simple single-agent task is fine as 1 task. A multi-domain request (e.g. backend + frontend + research) must produce one task per agent role.
+
+2. **End your response with the JSON block.** You may write agent files and reasoning first, but your absolute final output must be the ```json block. Do not write anything after it.
+
+
 """
 
 PROJECT_CONTEXT_HEADER = """
@@ -398,6 +502,8 @@ async def generate_harness(
         AGENTS_DIR.mkdir(parents=True, exist_ok=True)
         SKILLS_DIR.mkdir(parents=True, exist_ok=True)
         system = HARNESS_SYSTEM_GLOBAL.format(skill_body=skill_body + available_agents_block)
+    system += _build_port_rule()
+    system += "\n\n" + _design_systems_prompt()
 
     project_context = load_project_context(project_path)
 
@@ -417,7 +523,31 @@ async def generate_harness(
         cwd=cwd,
     )
 
+    # 질문 감지 → 오케스트레이터 자동 답변 후 재시도 (1회)
     parsed = _parse_harness_json(output)
+    if not parsed.get("tasks") and has_unanswered_questions(output):
+        on_event({"type": "status", "text": "🤖 하네스 질문 자동 답변 중..."})
+        answers = await generate_auto_answers(
+            agent_output=output,
+            card_title="",
+            board_context=user_request,
+            project_path=project_path,
+        )
+        retry_prompt = (
+            full_prompt
+            + "\n\n[오케스트레이터 자동 답변]\n"
+            + answers
+            + "\n\n위 답변을 바탕으로 에이전트 팀과 태스크를 구성하고 JSON을 출력하세요."
+        )
+        output, session_id, _ = await _run_claude(
+            prompt=retry_prompt,
+            system_prompt=system,
+            on_chunk=lambda c: on_event({"type": "harness_chunk", "text": c}),
+            on_session_id=lambda sid: on_event({"type": "session_id", "session_id": sid}),
+            cwd=cwd,
+        )
+        parsed = _parse_harness_json(output)
+
     parsed["session_id"] = session_id
     parsed["reused"] = False
     return parsed
@@ -434,6 +564,7 @@ async def run_card(
     session_id: str = None,
     on_session_id: Callable[[str], None] = None,
     project_path: str = None,
+    design_system: str = None,
 ) -> tuple[str, str]:
     """
     단일 카드(태스크) 실행.
@@ -472,6 +603,9 @@ async def run_card(
 
     system = "\n\n---\n\n".join(system_parts) if system_parts else \
         f"You are {agent_name}. Complete the assigned task."
+    system += _build_port_rule()
+    if design_system:
+        system = _inject_design(design_system, system)
 
     cwd = Path(project_path) if project_path else HOME
 

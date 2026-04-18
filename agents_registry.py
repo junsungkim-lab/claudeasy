@@ -51,37 +51,60 @@ def _parse_frontmatter(md_path: Path) -> dict:
 
 # ── 인덱스 빌드 ───────────────────────────────────────────────────────────────
 
+GLOBAL_AGENTS_DIR = Path.home() / ".claude" / "agents"
+
+
 def build_index() -> dict[str, dict]:
     """
     반환: {agent_name: {path, description, harness, lang}}
-    같은 이름이 여러 harness에 있으면 번호가 작은(앞선) harness 우선.
+
+    우선순위:
+    1. harness-100 서브모듈 (번호 앞선 harness 우선)
+    2. ~/.claude/agents/ 전역 커스텀 에이전트 (harness가 생성한 것 포함)
     """
-    if not SUBMODULE_DIR.exists():
-        logger.warning("[registry] harness-100 서브모듈 없음: %s", SUBMODULE_DIR)
-        return {}
-
-    lang_dir = SUBMODULE_DIR / PREFERRED_LANG
-    if not lang_dir.exists():
-        lang_dir = SUBMODULE_DIR / "en"
-
     index: dict[str, dict] = {}
 
-    for harness_dir in sorted(lang_dir.iterdir()):
-        if not harness_dir.is_dir():
-            continue
-        agents_dir = harness_dir / ".claude" / "agents"
-        if not agents_dir.exists():
-            continue
-        for agent_file in sorted(agents_dir.glob("*.md")):
+    # 1. harness-100 서브모듈
+    if SUBMODULE_DIR.exists():
+        lang_dir = SUBMODULE_DIR / PREFERRED_LANG
+        if not lang_dir.exists():
+            lang_dir = SUBMODULE_DIR / "en"
+
+        if lang_dir.exists():
+            for harness_dir in sorted(lang_dir.iterdir()):
+                if not harness_dir.is_dir():
+                    continue
+                agents_dir = harness_dir / ".claude" / "agents"
+                if not agents_dir.exists():
+                    continue
+                for agent_file in sorted(agents_dir.glob("*.md")):
+                    fm = _parse_frontmatter(agent_file)
+                    name = fm.get("name") or agent_file.stem
+                    desc = fm.get("description", "")
+                    if name not in index:
+                        index[name] = {
+                            "path":        agent_file,
+                            "description": desc,
+                            "harness":     harness_dir.name,
+                            "lang":        lang_dir.name,
+                            "source":      "harness100",
+                        }
+    else:
+        logger.warning("[registry] harness-100 서브모듈 없음: %s", SUBMODULE_DIR)
+
+    # 2. ~/.claude/agents/ 전역 커스텀 에이전트
+    if GLOBAL_AGENTS_DIR.exists():
+        for agent_file in sorted(GLOBAL_AGENTS_DIR.glob("*.md")):
             fm = _parse_frontmatter(agent_file)
             name = fm.get("name") or agent_file.stem
             desc = fm.get("description", "")
-            if name not in index:   # 번호 앞선 harness 우선
+            if name not in index:   # harness-100에 같은 이름 있으면 그쪽 우선
                 index[name] = {
                     "path":        agent_file,
                     "description": desc,
-                    "harness":     harness_dir.name,
-                    "lang":        lang_dir.name,
+                    "harness":     "custom",
+                    "lang":        "—",
+                    "source":      "global",
                 }
 
     logger.info("[registry] 인덱스 빌드 완료: %d개 에이전트", len(index))
@@ -156,7 +179,12 @@ def format_for_prompt(max_agents: int = 80) -> str:
 def list_all() -> list[dict]:
     """UI용 전체 에이전트 목록."""
     return [
-        {"name": name, "description": info["description"], "harness": info["harness"]}
+        {
+            "name": name,
+            "description": info["description"],
+            "harness": info["harness"],
+            "source": info.get("source", "harness100"),
+        }
         for name, info in get_index().items()
     ]
 
