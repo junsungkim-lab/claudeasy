@@ -50,7 +50,7 @@ _SERVER_PATTERN = re.compile(
 )
 
 
-def _normalize_artifact(data: dict, project_path: str | None) -> tuple[dict | None, list[str]]:
+def _normalize_artifact(data: dict, project_path: "str | None") -> "tuple[dict | None, list[str]]":
     """LLM emit 값을 정규화·검증. 거부 시 (None, [사유]), 통과 시 (artifact, warnings)."""
     import shlex
     warnings: list[str] = []
@@ -95,7 +95,7 @@ def _normalize_artifact(data: dict, project_path: str | None) -> tuple[dict | No
     }, warnings
 
 
-def parse_artifact(output: str, project_path: str = None) -> dict | None:
+def parse_artifact(output: str, project_path: str = None) -> "dict | None":
     """카드 output에서 ```artifact 블록을 파싱해 반환.
     없으면 출력 텍스트에서 실행 명령 패턴을 fallback 감지.
     """
@@ -112,7 +112,7 @@ def parse_artifact(output: str, project_path: str = None) -> dict | None:
             pass
 
     # 포트 추출 헬퍼 — "port 8080", ":8080", "localhost:8080", "--port 8080" 형태 인식
-    def _extract_port(text: str) -> int | None:
+    def _extract_port(text: str) -> "int | None":
         m = re.search(r"(?:--port\s+|localhost:|:\s*)(\d{4,5})\b", text)
         if m:
             return int(m.group(1))
@@ -976,7 +976,7 @@ async def generate_auto_answers(
     agent_output: str,
     card_title: str,
     board_context: str,
-    project_path: str | None,
+    project_path: "str | None",
 ) -> str:
     """에이전트가 던진 질문들에 대해 프로젝트 컨텍스트 기반으로 자동 답변 생성."""
     memory = load_project_context(project_path) or ""

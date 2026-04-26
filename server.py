@@ -1446,7 +1446,7 @@ def _safe_rmtree(path: Path) -> bool:
     return False
 
 
-def _script_missing(cmd: str, cwd: str | None) -> str | None:
+def _script_missing(cmd: str, cwd: "str | None") -> "str | None":
     """run_command에서 파일 실재를 검사할 수 있는 패턴만 확인. 없으면 None 반환(검증 패스)."""
     import shlex, json as _json
     if not cwd:
@@ -1508,8 +1508,8 @@ async def _watch_early_exit(card_id: int, proc: asyncio.subprocess.Process) -> N
 
 
 async def _persist_card_artifact(
-    card_id: int, artifact: dict | None, project_path: str | None
-) -> dict | None:
+    card_id: int, artifact: "dict | None", project_path: "str | None"
+) -> "dict | None":
     """artifact 검증 → DB 저장 → 경고 마커 부착. 공용 게이트 (3개 호출처 공유)."""
     if not artifact:
         return None
