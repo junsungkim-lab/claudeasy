@@ -74,6 +74,15 @@ def init_db():
         _migrate_legacy_cards(conn)
 
 
+def _safe_alter(sql: str):
+    """안전한 ALTER TABLE 실행 — 실패 시 무시"""
+    try:
+        with sqlite3.connect(DB_PATH) as c:
+            c.execute(sql)
+    except sqlite3.OperationalError:
+        pass  # column already exists
+
+
 def _migrate(conn):
     """기존 스키마에 새 컬럼 추가"""
     migrations = [
@@ -102,6 +111,20 @@ def _migrate(conn):
         "ALTER TABLE boards ADD COLUMN github_ref TEXT DEFAULT 'main'",
         "ALTER TABLE boards ADD COLUMN github_last_sha TEXT",
         "ALTER TABLE boards ADD COLUMN workspace_path TEXT",
+        # Orchestration Engine 신규 컬럼
+        "ALTER TABLE boards ADD COLUMN task_kind TEXT DEFAULT 'build'",
+        "ALTER TABLE boards ADD COLUMN clarification_status TEXT",
+        "ALTER TABLE boards ADD COLUMN clarification_questions TEXT",
+        "ALTER TABLE boards ADD COLUMN clarification_answers TEXT",
+        "ALTER TABLE boards ADD COLUMN automation_agent_prompt TEXT",
+        "ALTER TABLE boards ADD COLUMN automation_allowed_tools TEXT",
+        "ALTER TABLE boards ADD COLUMN automation_tool_dir TEXT",
+        "ALTER TABLE boards ADD COLUMN clarification_deadline TEXT",
+        "ALTER TABLE boards ADD COLUMN clarification_attempt INTEGER",
+        # Card 신규 컬럼
+        "ALTER TABLE cards ADD COLUMN card_kind TEXT DEFAULT 'task'",
+        # 의존성 기반 실행: 같은 run 내 task 인덱스 배열 (JSON), NULL이면 순차 폴백
+        "ALTER TABLE cards ADD COLUMN depends_on TEXT",
     ]
     for sql in migrations:
         try:
@@ -193,6 +216,17 @@ def get_boards():
         return [dict(r) for r in conn.execute("SELECT * FROM boards ORDER BY id DESC")]
 
 
+def get_boards_by_project_path(project_path: str) -> list:
+    """같은 project_path를 가진 활성 보드 목록 반환 (충돌 가드용)."""
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT id, name FROM boards WHERE project_path=? AND status != 'deleted' ORDER BY id DESC",
+            (str(project_path),),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
 def get_board(board_id: int):
     with sqlite3.connect(DB_PATH) as conn:
         conn.row_factory = sqlite3.Row
@@ -281,11 +315,13 @@ def delete_run(run_id: int):
 
 def create_card(board_id: int, run_id: int, title: str,
                 description: str = "", agent_role: str = "",
-                design_system: str = None) -> int:
+                design_system: str = None, depends_on: list = None) -> int:
+    import json as _json
+    depends_on_str = _json.dumps(depends_on) if depends_on is not None else None
     with sqlite3.connect(DB_PATH) as conn:
         cur = conn.execute(
-            "INSERT INTO cards (board_id, run_id, title, description, agent_role, design_system) VALUES (?,?,?,?,?,?)",
-            (board_id, run_id, title, description, agent_role, design_system),
+            "INSERT INTO cards (board_id, run_id, title, description, agent_role, design_system, depends_on) VALUES (?,?,?,?,?,?,?)",
+            (board_id, run_id, title, description, agent_role, design_system, depends_on_str),
         )
         return cur.lastrowid
 
@@ -422,3 +458,108 @@ def set_setting(key: str, value: str):
             "INSERT INTO settings (key, value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
             (key, value),
         )
+
+
+# ── Orchestration Engine Helpers ──────────────────────────────────────────────
+
+def update_board_fields(board_id: int, fields: dict):
+    """여러 필드를 한 번에 업데이트"""
+    if not fields:
+        return
+    sets = ", ".join(f"{k}=?" for k in fields)
+    vals = list(fields.values()) + [board_id]
+    with sqlite3.connect(DB_PATH) as c:
+        c.execute(f"UPDATE boards SET {sets} WHERE id=?", vals)
+
+
+def create_clarification_card(board_id: int, questions: list) -> int:
+    """clarification 카드 생성"""
+    import json
+    run_id = get_latest_run_id(board_id)
+    if not run_id:
+        run_id = create_run(board_id, trigger="manual")
+
+    with sqlite3.connect(DB_PATH) as c:
+        cur = c.execute(
+            "INSERT INTO cards (board_id, run_id, title, status, card_kind, output) VALUES (?,?,?,?,?,?)",
+            (board_id, run_id, "추가 정보가 필요합니다", "awaiting_user", "clarification", json.dumps(questions, ensure_ascii=False))
+        )
+        return cur.lastrowid
+
+
+def save_clarification_answers(board_id: int, answers: dict):
+    """clarification 답변 저장"""
+    import json
+    with sqlite3.connect(DB_PATH) as c:
+        c.execute(
+            "UPDATE boards SET clarification_answers=?, clarification_status='resolved' WHERE id=?",
+            (json.dumps(answers, ensure_ascii=False), board_id)
+        )
+
+
+def update_board_automation_spec(board_id: int, prompt: str, tools: list, tool_dir: str):
+    """automation 스펙 저장"""
+    import json
+    with sqlite3.connect(DB_PATH) as c:
+        c.execute(
+            "UPDATE boards SET automation_agent_prompt=?, automation_allowed_tools=?, automation_tool_dir=? WHERE id=?",
+            (prompt, json.dumps(tools), tool_dir, board_id)
+        )
+
+
+def create_env_input_card(board_id: int, env_vars: list) -> int:
+    """환경 변수 입력 카드 생성"""
+    import json
+    run_id = get_latest_run_id(board_id)
+    if not run_id:
+        run_id = create_run(board_id, trigger="manual")
+
+    with sqlite3.connect(DB_PATH) as c:
+        cur = c.execute(
+            "INSERT INTO cards (board_id, run_id, title, status, card_kind, output) VALUES (?,?,?,?,?,?)",
+            (board_id, run_id, "환경 변수 설정이 필요합니다", "awaiting_user", "env_input", json.dumps(env_vars, ensure_ascii=False))
+        )
+        return cur.lastrowid
+
+
+def get_latest_run(board_id: int):
+    """최신 run을 전체 데이터로 반환"""
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT * FROM runs WHERE board_id=? ORDER BY id DESC LIMIT 1", (board_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def get_run_cards(run_id: int):
+    """run의 모든 카드 반환"""
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        return [dict(r) for r in conn.execute(
+            "SELECT * FROM cards WHERE run_id=? ORDER BY id", (run_id,)
+        )]
+
+
+def update_card(card_id: int, **kwargs):
+    """카드 필드 업데이트"""
+    if not kwargs:
+        return
+    sets = ", ".join(f"{k}=?" for k in kwargs)
+    vals = list(kwargs.values()) + [card_id]
+    with sqlite3.connect(DB_PATH) as c:
+        c.execute(f"UPDATE cards SET {sets} WHERE id=?", vals)
+
+
+def insert_card(board_id: int, title: str, status: str = "backlog", agent_role: str = None) -> int:
+    """카드 생성 (run 없이)"""
+    run_id = get_latest_run_id(board_id)
+    if not run_id:
+        run_id = create_run(board_id, trigger="manual")
+
+    with sqlite3.connect(DB_PATH) as c:
+        cur = c.execute(
+            "INSERT INTO cards (board_id, run_id, title, status, agent_role) VALUES (?,?,?,?,?)",
+            (board_id, run_id, title, status, agent_role)
+        )
+        return cur.lastrowid

@@ -35,8 +35,8 @@ export function useCreateBoard() {
 export function useDeleteBoard() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (boardId: number) =>
-      api(`/api/boards/${boardId}`, { method: "DELETE" }),
+    mutationFn: ({ boardId, deleteFiles = false }: { boardId: number; deleteFiles?: boolean }) =>
+      api(`/api/boards/${boardId}?delete_files=${deleteFiles}`, { method: "DELETE" }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["boards"] }),
   });
 }

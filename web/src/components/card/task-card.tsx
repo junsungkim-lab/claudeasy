@@ -1,5 +1,7 @@
-import { CheckCircle2, XCircle, Loader2, Clock, AlertCircle, ThumbsUp, Palette } from "lucide-react";
+import { CheckCircle2, XCircle, Loader2, Clock, AlertCircle, ThumbsUp, Palette, Play, ExternalLink } from "lucide-react";
+import { useState } from "react";
 import { useUIStore } from "@/stores/ui-store";
+import { api } from "@/api/client";
 import { cn, truncate } from "@/lib/utils";
 import type { Card } from "@/api/client";
 
@@ -51,6 +53,20 @@ const STATUS_META: Record<string, { icon: React.ReactNode; border: string; bg: s
 export function TaskCard({ card }: { card: Card }) {
   const { setActiveCard } = useUIStore();
   const meta = STATUS_META[card.status] ?? STATUS_META.backlog;
+  const [running, setRunning] = useState(false);
+  const [runPort, setRunPort] = useState<number | null>(card.artifact_port ?? null);
+
+  const hasArtifact = card.status === "done" && card.run_command;
+
+  const handleRun = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (running) return;
+    setRunning(true);
+    try {
+      const res = await api<{ pid: number; port: number }>(`/api/cards/${card.id}/run`, { method: "POST" });
+      if (res.port) setRunPort(res.port);
+    } catch {}
+  };
 
   return (
     <button
@@ -86,6 +102,35 @@ export function TaskCard({ card }: { card: Card }) {
             <p className="text-[11px] text-gray-500 mt-1.5 line-clamp-2 leading-relaxed font-mono">
               {truncate(card.output.replace(/[#*`]/g, ""), 110)}
             </p>
+          )}
+
+          {hasArtifact && (
+            <div className="flex items-center gap-2 mt-2" onClick={(e) => e.stopPropagation()}>
+              <button
+                onClick={handleRun}
+                className={cn(
+                  "flex items-center gap-1 text-[10px] px-2 py-1 rounded-md font-medium transition-colors",
+                  running
+                    ? "bg-emerald-100 text-emerald-700"
+                    : "bg-indigo-600 text-white hover:bg-indigo-700"
+                )}
+              >
+                {running
+                  ? <><span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" /> 실행 중</>
+                  : <><Play size={9} /> 실행하기</>
+                }
+              </button>
+              {running && runPort && (
+                <a
+                  href={`http://localhost:${runPort}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="flex items-center gap-1 text-[10px] text-indigo-500 hover:text-indigo-700"
+                >
+                  <ExternalLink size={9} /> :{runPort}
+                </a>
+              )}
+            </div>
           )}
         </div>
       </div>

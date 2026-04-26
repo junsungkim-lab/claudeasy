@@ -1,6 +1,8 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { AppLayout } from "@/components/layout/app-layout";
 import { BoardPage } from "@/components/board/board-page";
+import { SettingsPage } from "@/components/settings/settings-page";
+import { Header } from "@/components/layout/header";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -9,8 +11,15 @@ const queryClient = new QueryClient({
 });
 
 function Router() {
-  const match = window.location.pathname.match(/^\/board\/(\d+)/);
-  if (match) return <BoardPage boardId={Number(match[1])} />;
+  const path = window.location.pathname;
+  const boardMatch = path.match(/^\/board\/(\d+)/);
+  if (boardMatch) return <BoardPage boardId={Number(boardMatch[1])} />;
+  if (path === "/settings") return (
+    <div className="flex flex-col h-screen">
+      <Header />
+      <SettingsPage />
+    </div>
+  );
   return <AppLayout />;
 }
 

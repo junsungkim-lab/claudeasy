@@ -1,6 +1,6 @@
 import { useState } from "react";
 import ReactMarkdown from "react-markdown";
-import { Star, GitFork, Loader2, ExternalLink, Zap, Download } from "lucide-react";
+import { Star, Loader2, ExternalLink, Zap } from "lucide-react";
 import { api } from "@/api/client";
 import { useTrending, useApplyTrending } from "@/hooks/queries/use-trending";
 import { useTrendingWs } from "@/hooks/sockets/use-trending-ws";
@@ -16,14 +16,13 @@ export function TrendingModal() {
   const [language, setLanguage] = useState("");
   const [since, setSince] = useState("daily");
   const [analyzeId, setAnalyzeId] = useState<string | null>(null);
-  const [analyzing, setAnalyzing] = useState<string | null>(null); // owner/repo
+  const [analyzing, setAnalyzing] = useState<string | null>(null);
   const [analysisResults, setAnalysisResults] = useState<Record<string, string>>({});
   const { mutate: applyTrending, isPending: applying } = useApplyTrending();
 
   const { data: repos = [], isLoading, error } = useTrending(language, since, trendingOpen);
   const { output, done } = useTrendingWs(analyzeId);
 
-  // When analysis finishes, store result
   const currentAnalyzing = analyzing;
   if (done && analyzeId && currentAnalyzing && output && !analysisResults[currentAnalyzing]) {
     setAnalysisResults((prev) => ({ ...prev, [currentAnalyzing]: output }));
@@ -50,12 +49,13 @@ export function TrendingModal() {
     }
   };
 
-  const handleApply = (repoKey: string) => {
+  const handleApply = (repoKey: string, repo: TrendingRepo) => {
     const analysis = analysisResults[repoKey];
     if (!analysis) return;
-    applyTrending({ analysis, project_path: selectedProjectPath }, {
-      onSuccess: closeTrending,
-    });
+    applyTrending(
+      { analysis, owner: repo.owner, repo: repo.repo, project_path: selectedProjectPath },
+      { onSuccess: closeTrending }
+    );
   };
 
   return (
@@ -66,7 +66,6 @@ export function TrendingModal() {
       className="max-w-2xl max-h-[80vh] flex flex-col"
     >
       <div className="flex flex-col overflow-hidden">
-        {/* Filters */}
         <div className="flex gap-2 p-4 border-b border-gray-200">
           <Select
             value={language}
@@ -92,9 +91,13 @@ export function TrendingModal() {
             <option value="weekly">이번 주</option>
             <option value="monthly">이번 달</option>
           </Select>
+          {selectedProjectPath && (
+            <span className="ml-auto flex items-center text-[10px] text-indigo-500 font-mono truncate max-w-[200px]">
+              {selectedProjectPath.split("/").slice(-2).join("/")} 기준
+            </span>
+          )}
         </div>
 
-        {/* List */}
         <div className="overflow-y-auto flex-1 p-4 space-y-3" style={{ maxHeight: "60vh" }}>
           {isLoading && (
             <div className="flex items-center justify-center py-12">
@@ -111,24 +114,17 @@ export function TrendingModal() {
             const isDone = !isAnalyzing && !!analysisResults[key];
 
             return (
-              <div
-                key={key}
-                className="border border-gray-200 rounded-lg p-3 bg-white space-y-2"
-              >
+              <div key={key} className="border border-gray-200 rounded-lg p-3 bg-white space-y-2">
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <span className="text-sm font-medium text-gray-900">
-                        {repo.full_name}
-                      </span>
+                      <span className="text-sm font-medium text-gray-900">{repo.full_name}</span>
                       {repo.language && (
                         <Badge variant="secondary" className="text-[10px]">{repo.language}</Badge>
                       )}
                     </div>
                     {repo.description && (
-                      <p className="text-xs text-gray-500 mt-0.5 line-clamp-2">
-                        {repo.description}
-                      </p>
+                      <p className="text-xs text-gray-500 mt-0.5 line-clamp-2">{repo.description}</p>
                     )}
                     <div className="flex items-center gap-3 mt-1.5">
                       <span className="flex items-center gap-1 text-[10px] text-amber-400">
@@ -169,17 +165,15 @@ export function TrendingModal() {
                       <ReactMarkdown>{analysisOutput}</ReactMarkdown>
                     </div>
                     {isDone && (
-                      <div className="flex gap-2">
-                        <Button
-                          size="sm"
-                          onClick={() => handleApply(key)}
-                          disabled={applying}
-                          className="text-xs"
-                        >
-                          {applying ? <Loader2 size={11} className="animate-spin" /> : <Zap size={11} />}
-                          {selectedProjectPath ? "내 프로젝트에 적용" : "보드로 만들기"}
-                        </Button>
-                      </div>
+                      <Button
+                        size="sm"
+                        onClick={() => handleApply(key, repo)}
+                        disabled={applying}
+                        className="text-xs"
+                      >
+                        {applying ? <Loader2 size={11} className="animate-spin" /> : <Zap size={11} />}
+                        분석 적용하기
+                      </Button>
                     )}
                   </div>
                 )}

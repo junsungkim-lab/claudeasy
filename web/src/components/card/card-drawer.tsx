@@ -25,6 +25,9 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
+import { ClarificationCard } from "@/components/board/clarification-card";
+import { EnvInputCard } from "@/components/board/env-input-card";
+import { ArtifactEnvForm } from "@/components/board/artifact-env-form";
 import type { Feedback } from "@/api/client";
 
 export function CardDrawer() {
@@ -48,13 +51,22 @@ export function CardDrawer() {
   const [askingIds, setAskingIds] = useState<Set<number>>(new Set());
   const [artifactRunning, setArtifactRunning] = useState(false);
   const [artifactPid, setArtifactPid] = useState<number | null>(null);
+  const [artifactPort, setArtifactPort] = useState<number | null>(null);
+  const [envReady, setEnvReady] = useState(true);
   const [slideIndex, setSlideIndex] = useState(0);
 
   useEffect(() => {
-    if (!activeCardId || !card?.artifact_type) { setArtifactRunning(false); setArtifactPid(null); return; }
+    if (!activeCardId || !card?.artifact_type) {
+      setArtifactRunning(false); setArtifactPid(null); setArtifactPort(null);
+      return;
+    }
     fetch(`/api/cards/${activeCardId}/run-status`)
       .then((r) => r.json())
-      .then((d) => { setArtifactRunning(d.running); setArtifactPid(d.pid ?? null); })
+      .then((d) => {
+        setArtifactRunning(d.running);
+        setArtifactPid(d.pid ?? null);
+        setArtifactPort(d.port ?? null);
+      })
       .catch(() => {});
   }, [activeCardId, card?.artifact_type]);
 
@@ -63,6 +75,7 @@ export function CardDrawer() {
     const res = await fetch(`/api/cards/${activeCardId}/run`, { method: "POST" });
     const data = await res.json();
     if (data.pid) { setArtifactRunning(true); setArtifactPid(data.pid); }
+    if (data.port) setArtifactPort(data.port);
   };
 
   const handleStopArtifact = async () => {
@@ -70,6 +83,7 @@ export function CardDrawer() {
     await fetch(`/api/cards/${activeCardId}/stop`, { method: "POST" });
     setArtifactRunning(false);
     setArtifactPid(null);
+    setArtifactPort(null);
   };
 
   const handleApprove = () => approve({ cardId: activeCardId!, action: "approve" });
@@ -153,17 +167,29 @@ export function CardDrawer() {
               </p>
             )}
 
-            {/* 출력 결과 */}
-            {output ? (
-              <div className="prose-output border border-gray-200 rounded-xl p-4 bg-white">
-                <ReactMarkdown>{output}</ReactMarkdown>
-              </div>
-            ) : (
-              <div className="flex items-center justify-center h-24 border border-dashed border-gray-200 rounded-xl bg-white">
-                <p className="text-xs text-gray-500">
-                  {card.status === "backlog" ? "대기 중..." : "출력 없음"}
-                </p>
-              </div>
+            {/* 특수 카드 타입 */}
+            {card?.card_kind === "clarification" && selectedBoardId && (
+              <ClarificationCard card={card} boardId={selectedBoardId} />
+            )}
+            {card?.card_kind === "env_input" && selectedBoardId && (
+              <EnvInputCard card={card} boardId={selectedBoardId} />
+            )}
+
+            {/* 일반 출력 결과 */}
+            {card?.card_kind !== "clarification" && card?.card_kind !== "env_input" && (
+              <>
+                {output ? (
+                  <div className="prose-output border border-gray-200 rounded-xl p-4 bg-white">
+                    <ReactMarkdown>{output}</ReactMarkdown>
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-center h-24 border border-dashed border-gray-200 rounded-xl bg-white">
+                    <p className="text-xs text-gray-500">
+                      {card.status === "backlog" ? "대기 중..." : "출력 없음"}
+                    </p>
+                  </div>
+                )}
+              </>
             )}
 
             {/* 질문 감지 */}
@@ -246,16 +272,20 @@ export function CardDrawer() {
             {/* 산출물 실행 */}
             {card.artifact_type && card.status === "done" && (
               <div className="border border-gray-200 rounded-xl p-3 bg-white space-y-2">
+                {/* 환경 변수 폼 (C-5: card-drawer에도 동일한 가드 적용) */}
+                {activeCardId && (
+                  <ArtifactEnvForm cardId={activeCardId} onReadyChange={setEnvReady} />
+                )}
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <div className={cn("w-2 h-2 rounded-full", artifactRunning ? "bg-green-400 animate-pulse" : "bg-gray-300")} />
                     <span className="text-[11px] font-medium text-gray-900">
                       {card.artifact_type === "server" ? "서버" : "스크립트"}
                     </span>
-                    {card.artifact_port && artifactRunning && (
-                      <a href={`http://localhost:${card.artifact_port}`} target="_blank" rel="noreferrer"
+                    {artifactPort && artifactRunning && (
+                      <a href={`http://localhost:${artifactPort}`} target="_blank" rel="noreferrer"
                         className="flex items-center gap-0.5 text-[10px] text-indigo-500 hover:text-indigo-600">
-                        :{card.artifact_port} <ExternalLink size={9} />
+                        :{artifactPort} <ExternalLink size={9} />
                       </a>
                     )}
                     {artifactPid && <span className="text-[9px] text-gray-500">PID {artifactPid}</span>}
@@ -266,7 +296,13 @@ export function CardDrawer() {
                         <Square size={10} /> 중지
                       </Button>
                     ) : (
-                      <Button size="sm" onClick={handleRunArtifact} className="h-6 px-2 text-[10px]">
+                      <Button
+                        size="sm"
+                        onClick={handleRunArtifact}
+                        disabled={!envReady}
+                        title={!envReady ? "환경 변수를 먼저 설정해주세요" : undefined}
+                        className="h-6 px-2 text-[10px]"
+                      >
                         <Play size={10} />
                         {card.artifact_type === "server" ? "서버 실행하기" : "실행하기"}
                       </Button>

@@ -35,6 +35,11 @@ export interface Board {
   github_repo: string | null;
   github_ref: string | null;
   workspace_path: string | null;
+  task_kind?: "build" | "automation";
+  clarification_status?: string;
+  clarification_questions?: string;
+  automation_agent_prompt?: string;
+  automation_tool_dir?: string;
 }
 
 export interface GitHubStatus {
@@ -58,6 +63,13 @@ export interface GitHubRepo {
   description: string;
 }
 
+export interface AutomationInfo {
+  task_kind: string | null;
+  tool_dir: string | null;
+  scripts: string[];
+  cron_expr: string | null;
+}
+
 export interface Run {
   id: number;
   board_id: number;
@@ -74,7 +86,7 @@ export interface Card {
   run_id: number;
   title: string;
   description: string;
-  status: "backlog" | "awaiting_approval" | "in_progress" | "done" | "error" | "rejected";
+  status: "backlog" | "awaiting_approval" | "in_progress" | "done" | "error" | "rejected" | "awaiting_user";
   agent_role: string;
   output: string | null;
   created_at: string;
@@ -84,6 +96,7 @@ export interface Card {
   artifact_port: number | null;
   artifact_cwd: string | null;
   design_system: string | null;
+  card_kind?: "task" | "clarification" | "env_input";
 }
 
 export interface Agent {

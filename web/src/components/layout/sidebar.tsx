@@ -12,12 +12,14 @@ import {
   Clock,
   Pause,
   Play,
+  TriangleRight,
+  Loader2,
 } from "lucide-react";
 import { useBoards, useDeleteBoard } from "@/hooks/queries/use-boards";
 import { useProjects } from "@/hooks/queries/use-projects";
 import { useAgents, useSyncAgents } from "@/hooks/queries/use-agents";
 import { useSessions } from "@/hooks/queries/use-sessions";
-import { useScheduledBoards, usePauseSchedule, useResumeSchedule } from "@/hooks/queries/use-schedule";
+import { useScheduledBoards, usePauseSchedule, useResumeSchedule, useTriggerSchedule } from "@/hooks/queries/use-schedule";
 import { useUIStore } from "@/stores/ui-store";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -122,7 +124,7 @@ export function Sidebar() {
               boards={filteredBoards}
               selectedBoardId={selectedBoardId}
               onSelect={setSelectedBoard}
-              onDelete={deleteBoard}
+              onDelete={(id: number) => deleteBoard({ boardId: id })}
             />
             <ScheduledSection />
           </>
@@ -178,6 +180,18 @@ function BoardsSection({
               </p>
             </div>
           </button>
+          {b.status === "done" && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                window.location.href = `/board/${b.id}#output`;
+              }}
+              className="opacity-0 group-hover:opacity-100 transition-opacity mt-0.5 shrink-0 text-violet-500 hover:text-violet-700 text-[9px] font-medium leading-none px-1 py-0.5 rounded border border-violet-200 hover:bg-violet-50"
+              title="최종 결과물 보기"
+            >
+              결과물
+            </button>
+          )}
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -292,6 +306,7 @@ function ScheduledSection() {
   const { data: scheduled = [] } = useScheduledBoards();
   const { mutate: pause } = usePauseSchedule();
   const { mutate: resume } = useResumeSchedule();
+  const { mutate: trigger, isPending: triggering, variables: triggeringId } = useTriggerSchedule();
 
   if (scheduled.length === 0) return null;
 
@@ -304,48 +319,63 @@ function ScheduledSection() {
         </span>
       </div>
       <div className="space-y-0.5">
-        {scheduled.map((b) => (
-          <div
-            key={b.id}
-            className="flex items-center gap-1.5 px-2 py-1.5 rounded-md hover:bg-gray-100 group transition-colors"
-          >
-            <button
-              className="flex-1 min-w-0 text-left"
-              onClick={() => { window.location.href = `/board/${b.id}`; }}
+        {scheduled.map((b) => {
+          const isTriggering = triggering && triggeringId === b.id;
+          return (
+            <div
+              key={b.id}
+              className="flex items-center gap-1 px-2 py-1.5 rounded-md hover:bg-gray-100 group transition-colors"
             >
-              <p className={cn(
-                "text-[12px] truncate font-medium leading-4",
-                b.paused ? "text-gray-400" : "text-gray-800"
-              )}>
-                {b.name}
-              </p>
-              <div className="flex items-center gap-1 mt-0.5">
-                <span className="text-[9px] font-mono text-gray-400 bg-gray-100 px-1 py-0.5 rounded">
-                  {b.cron_expr}
-                </span>
-                {b.next_run_at && !b.paused && (
-                  <span className="text-[9px] text-gray-400 truncate">
-                    {formatNextRun(b.next_run_at)}
+              <button
+                className="flex-1 min-w-0 text-left"
+                onClick={() => { window.location.href = `/board/${b.id}`; }}
+              >
+                <p className={cn(
+                  "text-[12px] truncate font-medium leading-4",
+                  b.paused ? "text-gray-400" : "text-gray-800"
+                )}>
+                  {b.name}
+                </p>
+                <div className="flex items-center gap-1 mt-0.5">
+                  <span className="text-[9px] font-mono text-gray-400 bg-gray-100 px-1 py-0.5 rounded">
+                    {b.cron_expr}
                   </span>
-                )}
-                {b.paused && (
-                  <span className="text-[9px] text-amber-500">일시정지</span>
-                )}
+                  {b.next_run_at && !b.paused && (
+                    <span className="text-[9px] text-gray-400 truncate">
+                      {formatNextRun(b.next_run_at)}
+                    </span>
+                  )}
+                  {b.paused && (
+                    <span className="text-[9px] text-amber-500">일시정지</span>
+                  )}
+                </div>
+              </button>
+              <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-0.5 shrink-0">
+                <button
+                  onClick={(e) => { e.stopPropagation(); trigger(b.id); }}
+                  disabled={isTriggering}
+                  className="text-gray-400 hover:text-indigo-600 transition-colors p-0.5 rounded"
+                  title="지금 실행"
+                >
+                  {isTriggering
+                    ? <Loader2 size={11} className="animate-spin" />
+                    : <Play size={11} />}
+                </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (b.paused) resume(b.id);
+                    else pause(b.id);
+                  }}
+                  className="text-gray-400 hover:text-gray-700 transition-colors p-0.5 rounded"
+                  title={b.paused ? "재개" : "일시정지"}
+                >
+                  {b.paused ? <TriangleRight size={11} /> : <Pause size={11} />}
+                </button>
               </div>
-            </button>
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                if (b.paused) resume(b.id);
-                else pause(b.id);
-              }}
-              className="opacity-0 group-hover:opacity-100 transition-opacity shrink-0 text-gray-400 hover:text-gray-700"
-              title={b.paused ? "재개" : "일시정지"}
-            >
-              {b.paused ? <Play size={11} /> : <Pause size={11} />}
-            </button>
-          </div>
-        ))}
+            </div>
+          );
+        })}
       </div>
     </div>
   );

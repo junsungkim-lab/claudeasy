@@ -34,14 +34,18 @@ export function useApplyTrending() {
   return useMutation({
     mutationFn: ({
       analysis,
+      owner = "",
+      repo = "",
       project_path,
     }: {
       analysis: string;
+      owner?: string;
+      repo?: string;
       project_path: string | null;
     }) =>
       api("/api/trending/apply", {
         method: "POST",
-        body: JSON.stringify({ analysis, project_path }),
+        body: JSON.stringify({ analysis, owner, repo, project_path }),
       }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["boards"] }),
   });

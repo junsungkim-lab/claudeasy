@@ -45,48 +45,134 @@ def _get_reserved_ports() -> list[int]:
     return reserved
 
 
-def parse_artifact(output: str) -> dict | None:
-    """카드 output에서 ```artifact 블록을 파싱해 반환. 없으면 None."""
+def parse_artifact(output: str, project_path: str = None) -> dict | None:
+    """카드 output에서 ```artifact 블록을 파싱해 반환.
+    없으면 출력 텍스트에서 실행 명령 패턴을 fallback 감지.
+    """
+    # 1순위: 명시적 artifact 블록
     match = re.search(r"```artifact\s*(\{.*?\})\s*```", output, re.DOTALL)
-    if not match:
+    if match:
+        try:
+            data = json.loads(match.group(1))
+            artifact_type = data.get("type")
+            if artifact_type not in ("server", "script"):
+                return None
+            return {
+                "type": artifact_type,
+                "run_command": data.get("run_command", ""),
+                "port": data.get("port"),
+                "cwd": data.get("cwd") or project_path,
+            }
+        except (json.JSONDecodeError, KeyError):
+            pass
+
+    # 포트 추출 헬퍼 — "port 8080", ":8080", "localhost:8080", "--port 8080" 형태 인식
+    def _extract_port(text: str) -> int | None:
+        m = re.search(r"(?:--port\s+|localhost:|:\s*)(\d{4,5})\b", text)
+        if m:
+            return int(m.group(1))
+        m = re.search(r"\bport[=\s]+(\d{4,5})\b", text, re.IGNORECASE)
+        if m:
+            return int(m.group(1))
         return None
-    try:
-        data = json.loads(match.group(1))
-        artifact_type = data.get("type")
-        if artifact_type not in ("server", "script"):
-            return None
-        return {
-            "type": artifact_type,
-            "run_command": data.get("run_command", ""),
-            "port": data.get("port"),
-            "cwd": data.get("cwd"),
-        }
-    except (json.JSONDecodeError, KeyError):
-        return None
+
+    # 2순위: Python 서버 (server.py / app.py / uvicorn / python -m uvicorn)
+    py_server_match = re.search(
+        r"(?:python3?\s+-m\s+uvicorn|uvicorn|python3?)\s+([\w./]+\.py(?:\s+--\S+)*(?:\s+main:\S+)?)",
+        output
+    )
+    if py_server_match:
+        cmd = py_server_match.group(0).strip().split("\n")[0]
+        port = _extract_port(output)
+        return {"type": "server", "run_command": cmd, "port": port, "cwd": project_path}
+
+    # 3순위: Node/npm/pnpm/yarn/bun/vite/next 서버
+    node_server_match = re.search(
+        r"(?:npm run (?:dev|start|serve)|pnpm (?:dev|run dev|start)|yarn (?:dev|start)|"
+        r"bun run (?:dev|start)|next dev|vite(?:\s+--\S+)*|node\s+[\w./]+\.(?:js|mjs|cjs))",
+        output
+    )
+    if node_server_match:
+        cmd = node_server_match.group(0).strip().split("\n")[0]
+        port = _extract_port(output) or 3000
+        return {"type": "server", "run_command": cmd, "port": port, "cwd": project_path}
+
+    # 4순위: Python 웹 프레임워크 (flask / streamlit / gunicorn / hypercorn)
+    py_web_match = re.search(
+        r"(?:flask run|streamlit run\s+\S+|gunicorn\s+\S+|hypercorn\s+\S+|daphne\s+\S+)",
+        output
+    )
+    if py_web_match:
+        cmd = py_web_match.group(0).strip().split("\n")[0]
+        port = _extract_port(output) or (8501 if "streamlit" in cmd else 5000)
+        return {"type": "server", "run_command": cmd, "port": port, "cwd": project_path}
+
+    # 5순위: Python 스크립트 (main.py / cli.py / run.py)
+    script_match = re.search(
+        r"(?:(?:\.venv/bin/)?python3?)\s+(main\.py|cli\.py|run\.py|script\.py)(?:\s+[^\n`]{0,80})?",
+        output
+    )
+    if script_match:
+        cmd = script_match.group(0).strip().split("\n")[0]
+        return {"type": "script", "run_command": cmd, "port": None, "cwd": project_path}
+
+    # 6순위: npm/bun/tsx/ts-node 스크립트
+    ts_script_match = re.search(
+        r"(?:tsx|ts-node|bun)\s+[\w./]+\.(?:ts|js)",
+        output
+    )
+    if ts_script_match:
+        cmd = ts_script_match.group(0).strip().split("\n")[0]
+        return {"type": "script", "run_command": cmd, "port": None, "cwd": project_path}
+
+    return None
 
 
 def _build_port_rule() -> str:
     reserved = _get_reserved_ports()
-    ports_str = ", ".join(str(p) for p in reserved)
-    return (
-        "\n\n## ⚠️ 포트 사용 규칙\n"
-        f"다음 포트는 현재 이 플랫폼이 점유 중이므로 절대 사용하지 마세요: **{ports_str}**\n"
-        "새 서버나 앱을 실행할 때는 위 포트를 피해 3000~3999 또는 8000~8099 범위에서 선택하세요.\n\n"
-        "## 산출물 메타데이터\n"
-        "태스크 완료 후, 실행 가능한 산출물(서버 or 스크립트)이 있으면 output 맨 끝에 아래 블록을 추가하세요.\n"
-        "산출물이 없으면 블록을 생략하세요.\n\n"
-        "```artifact\n"
-        '{"type": "server", "run_command": "python server.py", "port": 8001, "cwd": "/절대/경로"}\n'
-        "```\n"
-        "또는 단순 스크립트:\n"
-        "```artifact\n"
-        '{"type": "script", "run_command": "python main.py", "cwd": "/절대/경로"}\n'
-        "```\n"
-        "- `type`: `server`(웹서버) 또는 `script`(단순 실행)\n"
-        "- `run_command`: 실행 명령어 (절대경로 또는 cwd 기준 상대 명령)\n"
-        "- `port`: 서버 타입일 때만 (생략 시 null)\n"
-        "- `cwd`: 명령어를 실행할 절대 경로"
+    reserved_str = ", ".join(str(p) for p in sorted(reserved)) if reserved else "없음"
+    return f"""
+## Artifact Output (REQUIRED)
+After completing all file writes, output an artifact JSON block:
+
+```artifact
+{{"type": "script", "run_command": "python main.py", "cwd": "/absolute/path/to/project"}}
+```
+
+Rules:
+- type MUST be "script" (NOT "server", NOT "web")
+- run_command: exact shell command to run the main script
+- cwd: absolute directory path — MUST equal the board's shared project directory
+- Do NOT create web servers, FastAPI apps, or Flask apps unless explicitly asked
+- Do NOT use ports: {reserved_str}
+
+## ⚠️ SINGLE PROJECT DIRECTORY (ABSOLUTE PRIORITY)
+All tasks in this board share ONE project directory.
+- The FIRST task picks the directory; ALL subsequent tasks use that EXACT same path.
+- Integration/test tasks MUST NOT create a new sibling folder (e.g. *-test, *-v2, *-integration, *-beer-blog).
+- artifact cwd MUST equal the shared project directory, never a sibling.
+
+## ⚠️ AI 호출은 반드시 Claude CLI 사용 (ABSOLUTE PRIORITY)
+- `anthropic` Python SDK, `import anthropic`, `Anthropic()` 클라이언트 사용 **금지**
+- AI 텍스트 생성이 필요하면 Claude CLI subprocess로 호출할 것:
+
+```python
+import subprocess, sys
+
+def call_claude(prompt: str) -> str:
+    result = subprocess.run(
+        ["claude", "-p", prompt, "--output-format", "text"],
+        capture_output=True, text=True
     )
+    if result.returncode != 0:
+        print(result.stderr, file=sys.stderr)
+        sys.exit(1)
+    return result.stdout.strip()
+```
+
+- `ANTHROPIC_API_KEY` 환경변수 불필요 → `.env.example`에 포함하지 말 것
+- `anthropic`을 `requirements.txt`에 추가하지 말 것
+"""
 
 
 # ── 에이전트 파일 경로 ────────────────────────────────────────────────────────
@@ -149,8 +235,9 @@ After generating files, output EXACTLY this JSON block (nothing else after it):
     {{"name": "agent-name", "role": "역할 설명"}}
   ],
   "tasks": [
-    {{"title": "태스크 제목", "description": "상세 설명", "agent": "agent-name"}},
-    {{"title": "태스크 제목2", "description": "상세 설명2", "agent": "agent-name2", "design_system": "vercel"}}
+    {{"title": "태스크 제목", "description": "상세 설명", "agent": "agent-name", "depends_on": []}},
+    {{"title": "태스크 제목2", "description": "상세 설명2", "agent": "agent-name2", "depends_on": [0]}},
+    {{"title": "태스크 제목3", "description": "상세 설명3", "agent": "agent-name", "design_system": "vercel", "depends_on": [0, 1]}}
   ],
   "schedule": "0 9 * * *"
 }}
@@ -170,6 +257,7 @@ Natural language → cron examples:
   "매달 1일 오전 9시"    → "0 9 1 * *"
 If the user says "한번만" or "지금 바로" with no recurrence, set null.
 The "design_system" field (optional): for tasks that produce web pages, landing pages, or UI components, set this to the most appropriate brand from the available design systems list. Omit for non-UI tasks.
+The "depends_on" field (REQUIRED): list of 0-based task indices this task must wait for before starting. Use [] for tasks with no dependencies. Example: if task 2 needs task 0 and task 1 to finish first, set "depends_on": [0, 1]. Tasks that can run in parallel share the same dependencies.
 Tasks must be specific, actionable, and ordered by execution sequence.
 In the JSON "agents" array, use the bare agent name (e.g. "researcher").
 
@@ -180,6 +268,10 @@ In the JSON "agents" array, use the bare agent name (e.g. "researcher").
 1. **Tasks are driven by agents, not the other way around.** First decide which specialized agents are needed for the request. Then assign each agent their focused task(s). A simple single-agent task is fine as 1 task. A multi-domain request (e.g. backend + frontend + research) must produce one task per agent role.
 
 2. **End your response with the JSON block.** You may write agent files and reasoning first, but your absolute final output must be the ```json block. Do not write anything after it.
+
+3. **All tasks share ONE project directory.** The first task picks the directory path; every subsequent task (including integration/test tasks) uses that EXACT same path. Never create sibling directories like `*-test`, `*-v2`, `*-integration`. artifact `cwd` MUST equal the shared project directory.
+
+4. **AI 호출은 Claude CLI만 사용.** `import anthropic` 및 Anthropic SDK 사용 금지. AI 텍스트 생성은 `subprocess.run(["claude", "-p", prompt, "--output-format", "text"], ...)` 로만 처리. `ANTHROPIC_API_KEY` 환경변수 불필요.
 
 
 """
@@ -204,8 +296,9 @@ After generating files (or immediately if needs_project=true), output EXACTLY th
     {{"name": "agent-name", "role": "역할 설명"}}
   ],
   "tasks": [
-    {{"title": "태스크 제목", "description": "상세 설명", "agent": "agent-name"}},
-    {{"title": "태스크 제목2", "description": "상세 설명2", "agent": "agent-name2", "design_system": "vercel"}}
+    {{"title": "태스크 제목", "description": "상세 설명", "agent": "agent-name", "depends_on": []}},
+    {{"title": "태스크 제목2", "description": "상세 설명2", "agent": "agent-name2", "depends_on": [0]}},
+    {{"title": "태스크 제목3", "description": "상세 설명3", "agent": "agent-name", "design_system": "vercel", "depends_on": [0, 1]}}
   ],
   "schedule": "0 9 * * *",
   "needs_project": false
@@ -227,6 +320,7 @@ Natural language → cron examples:
 If the user says "한번만" or "지금 바로" with no recurrence, set null.
 "needs_project": true if tasks involve creating/modifying source code files or a software project, false for research/analysis/content only.
 The "design_system" field (optional): for tasks that produce web pages, landing pages, or UI components, set this to the most appropriate brand from the available design systems list. Omit for non-UI tasks.
+The "depends_on" field (REQUIRED): list of 0-based task indices this task must wait for before starting. Use [] for tasks with no dependencies. Example: if task 2 needs task 0 and task 1 to finish first, set "depends_on": [0, 1]. Tasks that can run in parallel share the same dependencies.
 Tasks must be specific, actionable, and ordered by execution sequence.
 In the JSON "agents" array, use only the bare agent name WITHOUT the prefix (e.g. "researcher", not "cllocal__researcher").
 
@@ -237,6 +331,10 @@ In the JSON "agents" array, use only the bare agent name WITHOUT the prefix (e.g
 1. **Tasks are driven by agents, not the other way around.** First decide which specialized agents are needed for the request. Then assign each agent their focused task(s). A simple single-agent task is fine as 1 task. A multi-domain request (e.g. backend + frontend + research) must produce one task per agent role.
 
 2. **End your response with the JSON block.** You may write agent files and reasoning first, but your absolute final output must be the ```json block. Do not write anything after it.
+
+3. **All tasks share ONE project directory.** The first task picks the directory path; every subsequent task (including integration/test tasks) uses that EXACT same path. Never create sibling directories like `*-test`, `*-v2`, `*-integration`. artifact `cwd` MUST equal the shared project directory.
+
+4. **AI 호출은 Claude CLI만 사용.** `import anthropic` 및 Anthropic SDK 사용 금지. AI 텍스트 생성은 `subprocess.run(["claude", "-p", prompt, "--output-format", "text"], ...)` 로만 처리. `ANTHROPIC_API_KEY` 환경변수 불필요.
 
 
 """
@@ -262,6 +360,122 @@ MEMORY_HEADER = """
 ---
 {memory}
 ---
+"""
+
+HARNESS_CLASSIFY_SYSTEM = """You are a request classifier for an AI automation platform called claude-local.
+
+Your job: analyze the user's request and classify it into one of three kinds, then output ONLY a JSON object.
+
+## Classification Rules
+
+**automation**: The user wants a RECURRING, scheduled task that runs repeatedly at a fixed time.
+- Keywords: 매일/매주/매시간/N분마다/자동으로/자동화/스케줄/주기적으로/정기적으로
+- Action verbs: 실행/수집/발송/포스팅/업로드/모니터링/요약/정리
+- Example: "매일 9시에 경제뉴스 요약해서 블로그에 올려줘"
+- Example: "주 3회 인스타그램 포스팅 자동화해줘"
+
+**build**: The user wants a ONE-TIME development artifact (app, dashboard, tool, website).
+- Keywords: 만들어줘/개발해줘/구현해줘/대시보드/페이지/UI/서비스/앱/시스템
+- Example: "블로그 관리자 대시보드 만들어줘"
+- Example: "상품 재고 관리 시스템 구현해줘"
+
+**needs_clarification**: The request is too vague to classify or missing critical info.
+- Missing 2+ of: [platform/account, trigger timing, output destination, input source, result format]
+- Example: "마케팅 자동화해줘" (what platform? what to automate? when?)
+- Example: "SNS 관리해줘" (which platform? what actions? how often?)
+
+## Output Schema
+
+For **needs_clarification**:
+```json
+{
+  "kind": "needs_clarification",
+  "summary": "한 줄 요약",
+  "questions": [
+    {"id": "q1", "question": "어떤 플랫폼에 포스팅할까요? (네이버 블로그/티스토리/인스타그램 등)"},
+    {"id": "q2", "question": "얼마나 자주 실행할까요? (매일/매주/특정 시간)"},
+    {"id": "q3", "question": "콘텐츠 소재는 어디서 가져올까요? (웹 검색/직접 입력/특정 사이트)"}
+  ]
+}
+```
+
+For **automation**:
+```json
+{
+  "kind": "automation",
+  "summary": "한 줄 요약",
+  "automation": {
+    "agent_prompt": "너는 [역할] 에이전트야. tools/ 디렉토리의 스크립트를 Bash로 호출할 수 있어. [구체적인 매 실행 시 할 일]",
+    "allowed_tools": ["Bash", "Read", "Write"],
+    "schedule": "0 9 * * *",
+    "tool_agents": [
+      {"file": "tools/fetch_content.py", "task": "웹에서 콘텐츠를 수집해 JSON으로 반환하는 독립 실행 Python 스크립트"},
+      {"file": "tools/post_to_platform.py", "task": "수집된 콘텐츠를 플랫폼에 게시하는 독립 실행 Python 스크립트"}
+    ],
+    "env_vars": [
+      {"key": "PLATFORM_ID", "description": "플랫폼 로그인 ID"},
+      {"key": "PLATFORM_PW", "description": "플랫폼 로그인 비밀번호"}
+    ],
+    "notify_channel": "telegram"
+  }
+}
+```
+
+For **build**: (keep existing agents+tasks format)
+```json
+{
+  "kind": "build",
+  "summary": "한 줄 요약",
+  "agents": [...existing format...],
+  "tasks": [...existing format...],
+  "schedule": null
+}
+```
+
+Output ONLY the JSON. No explanation, no markdown fences.
+"""
+
+HARNESS_TOOL_DEV_SYSTEM = """You are a Python tool developer for an AI automation platform.
+
+Your task: create a single, reusable Python module that can be called as a standalone script.
+
+## Rules (STRICT)
+- NO web servers, NO FastAPI, NO Flask, NO HTTP endpoints
+- The script MUST be runnable as: `python tools/filename.py`
+- Use `os.environ.get('KEY')` for all sensitive values (API keys, passwords, etc.)
+- Create `.env.example` listing all required env keys (values blank or placeholder)
+- Add all dependencies to `requirements.txt` (one per line)
+- Print progress to stdout, errors to stderr
+- Exit with code 0 on success, non-zero on failure
+- Keep it simple: one file, one purpose
+
+## ⚠️ AI 호출 규칙 (ABSOLUTE PRIORITY)
+- `anthropic` SDK, `import anthropic`, `Anthropic()` 클라이언트 사용 **금지**
+- AI 텍스트 생성은 Claude CLI subprocess로만 호출:
+
+```python
+import subprocess, sys
+
+def call_claude(prompt: str) -> str:
+    result = subprocess.run(
+        ["claude", "-p", prompt, "--output-format", "text"],
+        capture_output=True, text=True
+    )
+    if result.returncode != 0:
+        print(result.stderr, file=sys.stderr)
+        sys.exit(1)
+    return result.stdout.strip()
+```
+
+- `ANTHROPIC_API_KEY` 불필요 → `.env.example`과 `requirements.txt`에 포함하지 말 것
+
+## Output format
+Write the Python file, then .env.example, then requirements.txt entries.
+After writing all files, output the artifact block:
+
+```artifact
+{"type": "script", "run_command": "python tools/FILENAME.py", "cwd": "/path/to/tool_dir"}
+```
 """
 
 
@@ -368,18 +582,41 @@ async def tavily_search(query: str) -> str:
 
 
 def _parse_harness_json(text: str) -> dict:
+    # 1순위: ```json 펜스
     match = re.search(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL)
     if match:
         try:
             return json.loads(match.group(1))
         except json.JSONDecodeError:
             pass
-    matches = re.findall(r"\{[^{}]*\"tasks\"[^{}]*\[.*?\][^{}]*\}", text, re.DOTALL)
-    if matches:
-        try:
-            return json.loads(matches[-1])
-        except json.JSONDecodeError:
-            pass
+
+    # 2순위: 중괄호 균형 기반 추출 — nested JSON도 올바르게 처리
+    # "tasks" 키를 포함하는 가장 큰 객체를 찾는다
+    best = None
+    i = 0
+    while i < len(text):
+        if text[i] == '{':
+            depth = 0
+            for j in range(i, len(text)):
+                if text[j] == '{':
+                    depth += 1
+                elif text[j] == '}':
+                    depth -= 1
+                    if depth == 0:
+                        candidate = text[i:j + 1]
+                        if '"tasks"' in candidate:
+                            try:
+                                parsed = json.loads(candidate)
+                                # 더 많은 tasks를 포함한 것을 우선
+                                if best is None or len(candidate) > len(best[0]):
+                                    best = (candidate, parsed)
+                            except json.JSONDecodeError:
+                                pass
+                        break
+        i += 1
+
+    if best:
+        return best[1]
     return {}
 
 
@@ -413,8 +650,9 @@ async def _run_claude(
         *args,
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.PIPE,  # M-2: DEVNULL → PIPE로 변경해 에러 진단 보존
         cwd=str(cwd or HOME),
+        limit=2**24,  # 16MB — stream-json 한 줄이 64KB 기본 한도를 넘을 때 방지
     )
     proc.stdin.write(input_payload.encode())
     await proc.stdin.drain()
@@ -448,6 +686,19 @@ async def _run_claude(
             pass
 
     await proc.wait()
+
+    # M-2: stderr 캡처 & 로깅
+    try:
+        stderr_data = await asyncio.wait_for(proc.stderr.read(), timeout=2)
+        if stderr_data and proc.returncode != 0:
+            import logging as _logging
+            _logging.getLogger(__name__).warning(
+                "[_run_claude] returncode=%d stderr=%s",
+                proc.returncode,
+                stderr_data[:500].decode(errors="replace"),
+            )
+    except asyncio.TimeoutError:
+        pass
 
     return output, captured_session_id, session_error
 

@@ -159,14 +159,19 @@ def clone_repo(owner: str, repo: str) -> Path:
     return dest
 
 
+CLONE_FETCH_TTL = 6 * 3600  # 6시간 이내 클론은 fetch 스킵
+
+
 async def async_clone_repo(owner: str, repo: str) -> Path:
-    """비동기 버전 클론."""
+    """비동기 버전 클론. 이미 클론됐고 6시간 이내면 네트워크 호출 없이 재사용."""
     safe_name = re.sub(r"[^a-zA-Z0-9._-]", "_", f"{owner}__{repo}")
     dest = CLONE_BASE / safe_name
     CLONE_BASE.mkdir(parents=True, exist_ok=True)
 
     if dest.exists():
-        await _run_git(["git", "fetch", "--depth", "1"], cwd=dest)
+        age = time.time() - dest.stat().st_mtime
+        if age > CLONE_FETCH_TTL:
+            await _run_git(["git", "fetch", "--depth", "1"], cwd=dest)
     else:
         clone_url = f"https://github.com/{owner}/{repo}.git"
         await _run_git(["git", "clone", "--depth", "1", clone_url, str(dest)])

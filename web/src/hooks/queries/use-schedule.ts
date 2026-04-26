@@ -44,6 +44,9 @@ interface ScheduleInfo {
   cron_expr: string | null;
   approval_mode: "auto" | "manual";
   status: string;
+  next_run_at: string | null;
+  enabled: boolean;
+  paused: boolean;
 }
 
 export function useSchedule(boardId: number | null) {
