@@ -30,6 +30,9 @@
 | 🔗 **의존성 기반 실행** | 사이클 감지, 실패 전파, 독립 태스크 병렬화 |
 | 🗓️ **자동화 & 스케줄링** | 자연어("매일 오전 9시") → cron 자동 등록 |
 | 📦 **아티팩트 자동 감지** | uvicorn, npm run dev, streamlit, flask 등 자동 인식 → 실행 버튼 |
+| 🔍 **아티팩트 3중 검증** | 파싱 정규화 → 저장 게이트 → 실행 실패 가시화 |
+| 🛡️ **SDK 자동 차단** | LLM이 Anthropic SDK를 사용해도 자동 제거 + CLI subprocess로 교체 |
+| 📋 **발행 대기 큐** | 블로그/SNS 자동화 보드에 주제·URL을 쌓아두고 순서대로 발행 |
 | 🔒 **민감어 자동 차단** | 비밀번호/API키 질문은 자동 답변 대신 사용자에게 에스컬레이션 |
 | 🌐 **GitHub 연동** | OAuth + Trending 레포 분석 + 내 프로젝트 적용 |
 | 🔔 **알림** | Telegram / Email 푸시 알림 |
@@ -42,7 +45,7 @@
 ### 사전 요구사항
 
 - [Claude Code CLI](https://claude.ai/code) 설치 + 인증 완료 (**필수**)
-- Python 3.11+
+- Python 3.9+
 - Node.js 18+ 또는 [Bun](https://bun.sh)
 
 ### 설치
@@ -87,8 +90,8 @@ React + FastAPI로 Todo 앱 만들어줘
 # 반복 자동화 (cron 자동 등록)
 매일 오전 8시에 환율 정보 가져와서 텔레그램으로 보내줘
 
-# 스케줄 자동 감지
-30분마다 서버 헬스체크하는 스크립트 만들어줘
+# 콘텐츠 자동화 (발행 큐 자동 생성)
+네이버 블로그 SEO 포스팅 자동화해줘. 매일 오전 10시에 발행.
 ```
 
 ### 2단계: 에이전트 팀 자동 구성
@@ -100,9 +103,9 @@ React + FastAPI로 Todo 앱 만들어줘
 
   [카드 1] 프로젝트 초기화 및 기반 구조 설정   backend-dev  → 완료
   [카드 2] URL 크롤러 모듈 구현              backend-dev  → 완료
-  [카드 3] 네이버 SEO 분석 + 포스트 생성기    backend-dev  → 완료
+  [카드 3] SEO 분석 + 포스트 생성기           backend-dev  → 완료
   [카드 4] Playwright 네이버 블로그 업로더    backend-dev  → 완료
-  [카드 5] 파이프라인 통합 + FastAPI 웹서버   backend-dev  → 완료
+  [카드 5] 파이프라인 통합 + 스케줄 연동       backend-dev  → 완료
   [카드 6] 통합 QA 및 파이프라인 검증         qa-engineer  → 완료
 ```
 
@@ -119,9 +122,26 @@ React + FastAPI로 Todo 앱 만들어줘
 
 - **서버** → `서버 실행` 버튼 클릭 → 백그라운드 실행 + 포트 링크 자동 생성
 - **스크립트** → `실행하기` 버튼
+- 실행 실패 시 5초 내 stderr 로그를 빨간 박스로 UI에 즉시 표시
 - 환경변수가 필요하면 실행 전에 입력 폼이 자동 표시됩니다
 
-### 5단계: 스케줄 관리 (자동화 보드)
+### 5단계: 발행 대기 큐 관리 (콘텐츠 자동화)
+
+블로그·SNS 등 반복 콘텐츠 자동화 보드는 "최종 결과물" 탭 하단에 **발행 대기 큐** 패널이 자동으로 표시됩니다.
+
+- 주제 텍스트 또는 `https://` URL을 입력해 큐에 추가
+- 추가 지시사항(톤, 타겟, 강조점 등) 별도 입력 가능
+- 등록된 항목은 순서대로 매일 1개씩 자동 발행
+- 최근 5개 발행 이력 확인 가능
+
+```
+발행 큐 예시:
+  1. 2026년 봄 건강 식단 트렌드          →  오늘 발행 예정
+  2. https://example.com/product        →  내일 발행 예정
+  3. 다이어트 보조제 비교 리뷰            →  모레 발행 예정
+```
+
+### 6단계: 스케줄 관리 (자동화 보드)
 
 보드 헤더 → 🕐 스케줄 아이콘에서 설정합니다.
 
@@ -132,6 +152,46 @@ React + FastAPI로 Todo 앱 만들어줘
   30분마다              →  */30 * * * *
   매시 정각             →  0 * * * *
 ```
+
+---
+
+## 아티팩트 3중 검증 시스템
+
+LLM이 생성한 실행 메타데이터(cwd, 실행 명령, 타입)를 3단계로 검증해 잘못된 설정이 고객에게 도달하지 않도록 차단합니다.
+
+```
+Layer 1: 파싱 정규화 (harness.py)
+  - cwd가 project 외부이면 project_path로 자동 보정
+  - type이 서버 키워드 없는데 server이면 script로 강등
+  - 인수 값 누락 의심 플래그(--flag) 경고
+
+Layer 2: 저장 게이트 (server.py)
+  - run_command 비어있으면 저장 거부 → 실행 버튼 미노출
+  - cwd 디렉터리 부재 시 저장 거부
+  - 스크립트 파일 부재 시 저장 거부
+  - 경고 항목은 카드 하단 마커 + UI 배지로 표시
+
+Layer 3: 실행 실패 가시화 (server.py)
+  - 프로세스 기동 후 5초 내 비정상 종료 감지
+  - stderr tail(최대 2000자)을 카드 하단 빨간 박스에 즉시 표시
+  - WebSocket artifact_failed 이벤트로 실시간 알림
+```
+
+---
+
+## Anthropic SDK 자동 차단
+
+이 플랫폼은 Claude Code CLI(`claude -p`)로만 AI를 호출합니다. `pip install anthropic`은 설치되어 있지 않으며, LLM이 실수로 SDK 코드를 작성해도 자동으로 교체합니다.
+
+**자동 교체 동작 (`_sanitize_sdk_usage`)**:
+
+| 대상 | 처리 |
+|------|------|
+| `import anthropic` / `from anthropic import ...` | 라인 제거 + Claude CLI subprocess snippet 삽입 |
+| `requirements.txt`의 `anthropic` 항목 | 자동 제거 |
+| `.env` / `.env.example`의 `ANTHROPIC_API_KEY` | 자동 제거 |
+
+카드 완료 시마다 프로젝트 전체 `.py` 파일을 자동 스캔하며, 교체된 파일 목록은 카드 경고 마커로 표시됩니다.
 
 ---
 
@@ -172,6 +232,8 @@ TAVILY_API_KEY=
 PORT=8100
 ```
 
+> **Anthropic API Key 불필요** — Claude Code CLI가 이미 인증되어 있습니다.
+
 알림(Telegram / Email) 설정은 UI의 **설정 페이지**에서 입력합니다.
 
 ---
@@ -181,7 +243,7 @@ PORT=8100
 | 파일 | 역할 |
 |------|------|
 | `server.py` | FastAPI 앱, 50+ API 엔드포인트, WebSocket 핸들러 |
-| `harness.py` | 하네스 생성, 카드 실행, 아티팩트 파싱 |
+| `harness.py` | 하네스 생성, 카드 실행, 아티팩트 파싱·정규화·SDK 차단 |
 | `db.py` | SQLite 스키마, CRUD, 자동 마이그레이션 |
 | `scheduler.py` | crontab 연동, 스케줄 등록/해제 |
 | `notifier.py` | Telegram / Email 알림 |
