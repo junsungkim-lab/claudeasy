@@ -2,49 +2,16 @@
 
 > **말하면 AI가 개발한다** — Claude Code를 이용한 로컬 멀티에이전트 오케스트레이션 플랫폼
 
-원하는 것을 입력하면, AI가 전문가 팀을 구성하고 태스크를 나눠 실시간으로 개발을 진행합니다. 코드 한 줄 없이도 자동화 스크립트, 웹 앱, 반복 작업 봇까지 만들 수 있습니다.
+![플로우 다이어그램](docs/diagram-flow.png)
 
-![메인 화면](docs/01-main.png)
-
----
-
-## 어떻게 동작하나요?
-
-```
-사용자 입력
-    │
-    ▼
-① 분류 (Classify)
-   "매일 뉴스 요약해줘"  →  자동화 보드 (cron 등록)
-   "블로그 만들어줘"     →  빌드 보드 (하네스 생성)
-   "더 알려줘"          →  질문 카드 (Clarification)
-    │
-    ▼
-② 하네스 생성 (Harness Generation)
-   Claude가 에이전트 팀 + 태스크 의존 그래프 설계
-   (Backend Dev, Frontend Dev, QA Engineer ...)
-    │
-    ▼
-③ 병렬 실행 (Parallel Execution)
-   독립 태스크 → 동시에 실행
-   의존 태스크 → 앞 단계 완료 후 실행
-   실시간 WebSocket 스트리밍으로 진행 상황 확인
-    │
-    ▼
-④ 결과물 & 스케줄 (Artifact & Schedule)
-   서버/스크립트 감지 → 실행 버튼 자동 생성
-   "매일 9시" 키워드 → crontab 자동 등록
-```
+원하는 것을 입력하면, AI가 전문가 팀을 구성하고 태스크를 나눠 실시간으로 개발을 진행합니다.  
+코드 한 줄 없이도 자동화 스크립트, 웹 앱, 반복 작업 봇까지 만들 수 있습니다.
 
 ---
 
-## 스크린샷
+## 아키텍처
 
-### 보드 실행 결과 — 6개 카드 전부 완료
-![보드 상세 화면](docs/02-board-view.png)
-
-### GitHub Trending 분석 — 트렌딩 레포를 내 프로젝트에 적용
-![GitHub Trending](docs/03-trending.png)
+![시스템 아키텍처](docs/diagram-arch.png)
 
 ---
 
@@ -61,66 +28,6 @@
 | 🌐 **GitHub 연동** | OAuth + Trending 레포 분석 + 내 프로젝트 적용 |
 | 🔔 **알림** | Telegram / Email 푸시 알림 |
 | 📚 **harness-100 라이브러리** | 10개 도메인, 489개 에이전트, 315개 스킬 내장 |
-
----
-
-## 아키텍처
-
-```
-┌──────────────────────────────────────────────────────────┐
-│                    Frontend (React 19)                    │
-│   사이드바(프로젝트)  │  보드 목록  │  카드 뷰  │  설정    │
-│         WebSocket 구독 (보드 / 런 / 카드 단위)            │
-└───────────────────────┬──────────────────────────────────┘
-                        │ HTTP + WebSocket
-┌───────────────────────▼──────────────────────────────────┐
-│                  server.py (FastAPI)                      │
-│                                                           │
-│  POST /api/boards ──► _classify_request()                 │
-│                              │                            │
-│                   ┌──────────▼──────────┐                │
-│                   │   _run_pipeline()   │                │
-│                   │   harness.py        │                │
-│                   │   generate_harness()│                │
-│                   └──────────┬──────────┘                │
-│                              │  agents + tasks            │
-│                   ┌──────────▼──────────┐                │
-│                   │ _run_cards_with_    │                │
-│                   │    deps()           │                │
-│                   │  (Kahn's sort)      │                │
-│                   └──────────┬──────────┘                │
-│                              │                            │
-│                   ┌──────────▼──────────┐                │
-│                   │    run_card()       │◄── Claude CLI   │
-│                   │    harness.py       │    subprocess   │
-│                   └──────────┬──────────┘                │
-│                              │ artifact detected          │
-│                   ┌──────────▼──────────┐                │
-│                   │  _artifact_procs    │  uvicorn / node │
-│                   │  (subprocess dict)  │  python / ...   │
-│                   └─────────────────────┘                │
-│                                                           │
-│  scheduler.py ──► crontab ──► /api/boards/{id}/trigger   │
-└───────────────────────┬──────────────────────────────────┘
-                        │ SQL
-┌───────────────────────▼──────────────────────────────────┐
-│                   SQLite (data.db)                        │
-│   boards │ runs │ cards │ agents │ feedback │ settings    │
-└──────────────────────────────────────────────────────────┘
-```
-
-### 핵심 파일
-
-| 파일 | 역할 |
-|------|------|
-| `server.py` | FastAPI 앱, 50+ API 엔드포인트, WebSocket 핸들러 |
-| `harness.py` | 하네스 생성, 카드 실행, 아티팩트 파싱 |
-| `db.py` | SQLite 스키마, CRUD, 자동 마이그레이션 |
-| `scheduler.py` | crontab 연동, 스케줄 등록/해제 |
-| `notifier.py` | Telegram / Email 알림 |
-| `github_trending.py` | 트렌딩 레포 스크래핑 + Claude 분석 |
-| `web/` | React + TypeScript 프론트엔드 |
-| `harness-100/` | 100개 프로덕션 하네스 라이브러리 |
 
 ---
 
@@ -152,13 +59,12 @@ cp .env.example .env
 ### 실행
 
 ```bash
-# 서버 시작
 python3 server.py
 ```
 
 브라우저에서 [http://localhost:8100](http://localhost:8100) 접속
 
-> 개발 모드(핫 리로드): 별도 터미널에서 `cd web && bun run dev` 실행 후 [http://localhost:5173](http://localhost:5173) 접속
+> **개발 모드** (핫 리로드): 별도 터미널에서 `cd web && bun run dev` 실행 후 [http://localhost:5173](http://localhost:5173) 접속
 
 ---
 
@@ -211,14 +117,14 @@ React + FastAPI로 Todo 앱 만들어줘
 
 ### 5단계: 스케줄 관리 (자동화 보드)
 
-보드 헤더 → 🕐 스케줄 아이콘:
+보드 헤더 → 🕐 스케줄 아이콘에서 설정합니다.
 
 ```
 지원하는 자연어 표현:
-  매일 오전 9시        →  0 9 * * *
+  매일 오전 9시         →  0 9 * * *
   매주 월요일 오전 10시  →  0 10 * * 1
-  30분마다             →  */30 * * * *
-  매시 정각            →  0 * * * *
+  30분마다              →  */30 * * * *
+  매시 정각             →  0 * * * *
 ```
 
 ---
@@ -260,48 +166,43 @@ TAVILY_API_KEY=
 PORT=8100
 ```
 
-알림(Telegram / Email) 설정은 UI의 **설정 페이지**에서 입력합니다. DB에 저장되어 재시작 후에도 유지됩니다.
+알림(Telegram / Email) 설정은 UI의 **설정 페이지**에서 입력합니다.
 
 ---
 
-## API 엔드포인트
+## 핵심 파일
 
-```
-POST   /api/boards                        # 보드 생성 (분류 + 하네스)
-GET    /api/boards                        # 보드 목록
-POST   /api/boards/{id}/runs              # 재실행
-DELETE /api/boards/{id}                   # 삭제
-
-POST   /api/cards/{id}/approve            # 카드 승인/거부
-POST   /api/cards/{id}/run                # 아티팩트 실행
-POST   /api/cards/{id}/stop               # 아티팩트 중지
-
-PUT    /api/boards/{id}/schedule          # 스케줄 등록
-POST   /api/boards/{id}/schedule/trigger  # 즉시 실행
-DELETE /api/boards/{id}/schedule          # 스케줄 해제
-
-WS     /ws/board/{id}                     # 보드 이벤트 스트림
-WS     /ws/run/{run_id}                   # 런 카드 업데이트
-WS     /ws/card/{id}                      # 카드 출력 실시간 스트림
-```
+| 파일 | 역할 |
+|------|------|
+| `server.py` | FastAPI 앱, 50+ API 엔드포인트, WebSocket 핸들러 |
+| `harness.py` | 하네스 생성, 카드 실행, 아티팩트 파싱 |
+| `db.py` | SQLite 스키마, CRUD, 자동 마이그레이션 |
+| `scheduler.py` | crontab 연동, 스케줄 등록/해제 |
+| `notifier.py` | Telegram / Email 알림 |
+| `github_trending.py` | 트렌딩 레포 스크래핑 + Claude 분석 |
+| `web/` | React 19 + TypeScript 프론트엔드 |
+| `harness-100/` | 100개 프로덕션 하네스 라이브러리 |
 
 ---
 
-## 기술 스택
+## 스크린샷
 
-**Backend**
-- FastAPI + uvicorn (비동기 REST + WebSocket)
-- SQLite (로컬 데이터베이스, 자동 마이그레이션)
-- Claude Code CLI (AI 실행 엔진)
-- crontab (스케줄링)
-- httpx, playwright
-
-**Frontend**
-- React 19 + TypeScript
-- Vite (빌드 도구)
-- TanStack React Query (서버 상태)
-- Zustand (클라이언트 상태)
-- Tailwind CSS 4
+<table>
+<tr>
+<td><img src="docs/01-main.png" alt="메인 화면" /></td>
+<td><img src="docs/02-board-view.png" alt="보드 실행 결과" /></td>
+</tr>
+<tr>
+<td align="center"><b>메인 화면</b> — 프로젝트 목록 + 요청 입력</td>
+<td align="center"><b>보드 뷰</b> — 6개 카드 전부 완료</td>
+</tr>
+<tr>
+<td colspan="2"><img src="docs/03-trending.png" alt="GitHub Trending" /></td>
+</tr>
+<tr>
+<td colspan="2" align="center"><b>GitHub Trending</b> — 트렌딩 레포 분석 + 내 프로젝트 적용</td>
+</tr>
+</table>
 
 ---
 
