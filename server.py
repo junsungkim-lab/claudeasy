@@ -21,7 +21,8 @@ load_dotenv(Path(__file__).parent / ".env")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
+from fastapi.responses import JSONResponse
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -911,6 +912,51 @@ async def get_automation_info(board_id: int):
         "scripts": scripts,
         "cron_expr": board.get("cron_expr"),
     }
+
+
+@app.get("/api/boards/{board_id}/topic-queue")
+async def get_topic_queue(board_id: int):
+    board = db.get_board(board_id)
+    if not board or not board.get("project_path"):
+        return JSONResponse(status_code=404, content={"error": "project_path 없음"})
+    qf = Path(board["project_path"]) / "topic_queue.json"
+    if not qf.exists():
+        return JSONResponse(status_code=404, content={"error": "topic_queue.json 없음"})
+    try:
+        return json.loads(qf.read_text(encoding="utf-8"))
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.post("/api/boards/{board_id}/topic-queue")
+async def add_topic_queue(board_id: int, request: Request):
+    board = db.get_board(board_id)
+    if not board or not board.get("project_path"):
+        return JSONResponse(status_code=404, content={"error": "project_path 없음"})
+    qf = Path(board["project_path"]) / "topic_queue.json"
+    data = json.loads(qf.read_text(encoding="utf-8")) if qf.exists() else {"queue": [], "history": []}
+    item = await request.json()
+    if not item.get("value", "").strip():
+        return JSONResponse(status_code=400, content={"error": "value 필요"})
+    item.setdefault("type", "topic")
+    data["queue"].append(item)
+    qf.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {"ok": True, "queue": data["queue"]}
+
+
+@app.delete("/api/boards/{board_id}/topic-queue/{index}")
+async def delete_topic_queue_item(board_id: int, index: int):
+    board = db.get_board(board_id)
+    if not board or not board.get("project_path"):
+        return JSONResponse(status_code=404, content={"error": "project_path 없음"})
+    qf = Path(board["project_path"]) / "topic_queue.json"
+    if not qf.exists():
+        return JSONResponse(status_code=404, content={"error": "topic_queue.json 없음"})
+    data = json.loads(qf.read_text(encoding="utf-8"))
+    if 0 <= index < len(data["queue"]):
+        data["queue"].pop(index)
+        qf.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {"ok": True, "queue": data["queue"]}
 
 
 @app.get("/api/boards/{board_id}/runs")

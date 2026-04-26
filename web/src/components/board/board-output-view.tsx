@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { Play, Square, ExternalLink, ArrowLeft, Terminal, Clock, RefreshCw, Folder, AlertTriangle } from "lucide-react";
+import { Play, Square, ExternalLink, ArrowLeft, Terminal, Clock, RefreshCw, Folder, AlertTriangle, Plus, Trash2, Link, ListOrdered } from "lucide-react";
 import { useRuns, useRunCards } from "@/hooks/queries/use-runs";
 import { useBoards } from "@/hooks/queries/use-boards";
 import { useAutomation } from "@/hooks/queries/use-automation";
@@ -269,6 +269,121 @@ function AutomationOutputView({ boardId }: { boardId: number }) {
   );
 }
 
+interface TopicQueueItem {
+  type: "topic" | "url";
+  value: string;
+  detail?: string;
+}
+
+function TopicQueuePanel({ boardId }: { boardId: number }) {
+  const [queue, setQueue] = useState<TopicQueueItem[] | null>(null);
+  const [history, setHistory] = useState<TopicQueueItem[]>([]);
+  const [inputValue, setInputValue] = useState("");
+  const [inputDetail, setInputDetail] = useState("");
+  const [adding, setAdding] = useState(false);
+
+  const load = useCallback(async () => {
+    const res = await fetch(`/api/boards/${boardId}/topic-queue`);
+    if (!res.ok) return; // topic_queue.json 없는 보드는 패널 미표시
+    const data = await res.json();
+    setQueue(data.queue ?? []);
+    setHistory((data.history ?? []).slice(-5).reverse());
+  }, [boardId]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const handleAdd = async () => {
+    const value = inputValue.trim();
+    if (!value) return;
+    const isUrl = /^https?:\/\//.test(value);
+    setAdding(true);
+    try {
+      const res = await fetch(`/api/boards/${boardId}/topic-queue`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: isUrl ? "url" : "topic", value, detail: inputDetail.trim() }),
+      });
+      if (res.ok) { setInputValue(""); setInputDetail(""); await load(); }
+    } finally { setAdding(false); }
+  };
+
+  const handleDelete = async (index: number) => {
+    await fetch(`/api/boards/${boardId}/topic-queue/${index}`, { method: "DELETE" });
+    await load();
+  };
+
+  if (queue === null) return null; // topic_queue.json 없는 보드 → 패널 숨김
+
+  return (
+    <div className="border border-gray-200 rounded-xl bg-white p-4 space-y-4">
+      <div className="flex items-center gap-2">
+        <ListOrdered size={13} className="text-indigo-500" />
+        <span className="text-[13px] font-semibold text-gray-800">발행 대기 큐</span>
+        <span className="ml-auto text-[10px] text-gray-400">{queue.length}개 대기 중</span>
+      </div>
+
+      {/* 추가 입력 */}
+      <div className="space-y-2">
+        <div className="flex gap-2">
+          <input
+            className="flex-1 text-[12px] border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+            placeholder="주제 텍스트 또는 https:// URL 입력"
+            value={inputValue}
+            onChange={(e) => setInputValue(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && handleAdd()}
+          />
+          <Button size="sm" onClick={handleAdd} disabled={adding || !inputValue.trim()} className="h-9 px-3 shrink-0">
+            <Plus size={12} /> 추가
+          </Button>
+        </div>
+        <input
+          className="w-full text-[11px] border border-gray-200 rounded-lg px-3 py-1.5 text-gray-600 focus:outline-none focus:ring-1 focus:ring-indigo-300"
+          placeholder="추가 지시사항 (선택) — 예: 20대 여성 타겟, 가격 강조"
+          value={inputDetail}
+          onChange={(e) => setInputDetail(e.target.value)}
+        />
+      </div>
+
+      {/* 대기 목록 */}
+      {queue.length === 0 ? (
+        <p className="text-[11px] text-gray-400 text-center py-3">대기 중인 항목이 없습니다</p>
+      ) : (
+        <div className="space-y-1.5">
+          {queue.map((item, i) => (
+            <div key={i} className="flex items-start gap-2 bg-gray-50 rounded-lg px-3 py-2">
+              <span className="text-[10px] text-gray-400 shrink-0 mt-0.5 w-4">{i + 1}</span>
+              {item.type === "url"
+                ? <Link size={11} className="text-indigo-400 shrink-0 mt-0.5" />
+                : <Terminal size={11} className="text-gray-400 shrink-0 mt-0.5" />}
+              <div className="flex-1 min-w-0">
+                <p className="text-[11px] text-gray-800 truncate">{item.value}</p>
+                {item.detail && <p className="text-[10px] text-gray-400 truncate">{item.detail}</p>}
+              </div>
+              <button onClick={() => handleDelete(i)} className="text-gray-300 hover:text-red-400 transition-colors shrink-0">
+                <Trash2 size={12} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* 최근 발행 이력 */}
+      {history.length > 0 && (
+        <div className="border-t border-gray-100 pt-3 space-y-1">
+          <p className="text-[10px] text-gray-400 font-medium">최근 발행</p>
+          {history.map((h: any, i) => (
+            <div key={i} className="flex items-center gap-2 text-[10px] text-gray-400">
+              <span className={h.success ? "text-green-500" : "text-red-400"}>{h.success ? "✓" : "✗"}</span>
+              <span className="truncate">{h.value}</span>
+              <span className="shrink-0">{h.date}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function BoardOutputView({ boardId }: { boardId: number }) {
   const { data: boards = [] } = useBoards();
   const board = boards.find((b) => b.id === boardId) ?? null;
@@ -318,6 +433,9 @@ export function BoardOutputView({ boardId }: { boardId: number }) {
             ))}
           </div>
         )}
+
+        {/* topic_queue.json 있는 보드에만 표시 — 다른 보드는 패널 자체가 null 반환 */}
+        <TopicQueuePanel boardId={boardId} />
       </div>
     </div>
   );
