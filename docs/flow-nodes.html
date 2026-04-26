@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #08080f;
+    width: 1400px;
+    height: 860px;
+    overflow: hidden;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  }
+  svg {
+    width: 1400px;
+    height: 860px;
+  }
+</style>
+</head>
+<body>
+<svg viewBox="0 0 1400 860" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <!-- 배경 그라디언트 -->
+    <radialGradient id="bg" cx="50%" cy="40%" r="60%">
+      <stop offset="0%" stop-color="#0f0f1a"/>
+      <stop offset="100%" stop-color="#08080f"/>
+    </radialGradient>
+
+    <!-- 화살표 마커들 -->
+    <marker id="arr-purple" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#7c3aed"/>
+    </marker>
+    <marker id="arr-indigo" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#4f46e5"/>
+    </marker>
+    <marker id="arr-cyan" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#0891b2"/>
+    </marker>
+    <marker id="arr-green" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#059669"/>
+    </marker>
+    <marker id="arr-amber" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#d97706"/>
+    </marker>
+    <marker id="arr-gray" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#374151"/>
+    </marker>
+
+    <!-- 글로우 필터 -->
+    <filter id="glow-purple" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="8" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="glow-sm" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="4" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+
+    <!-- 노드 그라디언트들 -->
+    <radialGradient id="g-user" cx="30%" cy="30%">
+      <stop offset="0%" stop-color="#4f46e5"/>
+      <stop offset="100%" stop-color="#2e1065"/>
+    </radialGradient>
+    <radialGradient id="g-classify" cx="30%" cy="30%">
+      <stop offset="0%" stop-color="#7c3aed"/>
+      <stop offset="100%" stop-color="#3b0764"/>
+    </radialGradient>
+    <radialGradient id="g-build" cx="30%" cy="30%">
+      <stop offset="0%" stop-color="#1d4ed8"/>
+      <stop offset="100%" stop-color="#1e3a5f"/>
+    </radialGradient>
+    <radialGradient id="g-auto" cx="30%" cy="30%">
+      <stop offset="0%" stop-color="#059669"/>
+      <stop offset="100%" stop-color="#064e3b"/>
+    </radialGradient>
+    <radialGradient id="g-clarify" cx="30%" cy="30%">
+      <stop offset="0%" stop-color="#d97706"/>
+      <stop offset="100%" stop-color="#451a03"/>
+    </radialGradient>
+    <radialGradient id="g-harness" cx="30%" cy="30%">
+      <stop offset="0%" stop-color="#0891b2"/>
+      <stop offset="100%" stop-color="#164e63"/>
+    </radialGradient>
+    <radialGradient id="g-cards" cx="30%" cy="30%">
+      <stop offset="0%" stop-color="#0284c7"/>
+      <stop offset="100%" stop-color="#0c4a6e"/>
+    </radialGradient>
+    <radialGradient id="g-exec" cx="30%" cy="30%">
+      <stop offset="0%" stop-color="#7c3aed"/>
+      <stop offset="100%" stop-color="#3b0764"/>
+    </radialGradient>
+    <radialGradient id="g-artifact" cx="30%" cy="30%">
+      <stop offset="0%" stop-color="#0f766e"/>
+      <stop offset="100%" stop-color="#042f2e"/>
+    </radialGradient>
+    <radialGradient id="g-cron" cx="30%" cy="30%">
+      <stop offset="0%" stop-color="#b45309"/>
+      <stop offset="100%" stop-color="#431407"/>
+    </radialGradient>
+    <radialGradient id="g-notify" cx="30%" cy="30%">
+      <stop offset="0%" stop-color="#4338ca"/>
+      <stop offset="100%" stop-color="#1e1b4b"/>
+    </radialGradient>
+  </defs>
+
+  <!-- 배경 -->
+  <rect width="1400" height="860" fill="url(#bg)"/>
+
+  <!-- 배경 그리드 점 -->
+  <pattern id="dots" x="0" y="0" width="40" height="40" patternUnits="userSpaceOnUse">
+    <circle cx="20" cy="20" r="1" fill="#1f2937" opacity="0.5"/>
+  </pattern>
+  <rect width="1400" height="860" fill="url(#dots)"/>
+
+  <!-- 타이틀 -->
+  <text x="700" y="46" text-anchor="middle" font-size="13" fill="#4b5563" font-family="-apple-system,sans-serif" letter-spacing="2">claudeasy · REQUEST FLOW</text>
+  <text x="700" y="76" text-anchor="middle" font-size="22" font-weight="700" fill="#e5e7eb" font-family="-apple-system,sans-serif">사용자 요청이 결과물이 되기까지</text>
+
+  <!-- ═══════════════ 연결선 (노드 아래에) ═══════════════ -->
+
+  <!-- 사용자 → 분류 -->
+  <line x1="200" y1="210" x2="380" y2="210" stroke="#4f46e5" stroke-width="2" stroke-dasharray="0" marker-end="url(#arr-indigo)" opacity="0.8"/>
+
+  <!-- 분류 → 빌드 -->
+  <path d="M 510 175 Q 510 130 620 130" stroke="#1d4ed8" stroke-width="1.5" fill="none" stroke-dasharray="5,3" marker-end="url(#arr-indigo)" opacity="0.7"/>
+  <!-- 분류 → 자동화 -->
+  <line x1="510" y1="210" x2="620" y2="210" stroke="#059669" stroke-width="1.5" fill="none" stroke-dasharray="5,3" marker-end="url(#arr-green)" opacity="0.7"/>
+  <!-- 분류 → 질문 -->
+  <path d="M 510 245 Q 510 290 620 290" stroke="#d97706" stroke-width="1.5" fill="none" stroke-dasharray="5,3" marker-end="url(#arr-amber)" opacity="0.7"/>
+
+  <!-- 빌드 → 하네스 생성 -->
+  <line x1="760" y1="130" x2="860" y2="210" stroke="#0891b2" stroke-width="2" fill="none" marker-end="url(#arr-cyan)" opacity="0.8"/>
+
+  <!-- 자동화 → 하네스 생성 (약하게, 점선) -->
+  <!-- 자동화 → cron 직접 -->
+  <line x1="760" y1="210" x2="860" y2="380" stroke="#d97706" stroke-width="1.5" fill="none" stroke-dasharray="5,3" marker-end="url(#arr-amber)" opacity="0.6"/>
+
+  <!-- 질문 → 분류 (루프백) -->
+  <path d="M 700 310 Q 700 370 565 370 Q 445 370 445 280" stroke="#374151" stroke-width="1.5" fill="none" stroke-dasharray="4,4" marker-end="url(#arr-gray)" opacity="0.5"/>
+
+  <!-- 하네스 생성 → 카드 생성 -->
+  <line x1="980" y1="210" x2="1080" y2="210" stroke="#0284c7" stroke-width="2" marker-end="url(#arr-cyan)" opacity="0.8"/>
+
+  <!-- 카드 생성 → 병렬 실행 -->
+  <line x1="1080" y1="250" x2="1080" y2="380" stroke="#7c3aed" stroke-width="2" marker-end="url(#arr-purple)" opacity="0.8"/>
+
+  <!-- 병렬 실행 → 결과물 -->
+  <line x1="980" y1="420" x2="860" y2="560" stroke="#0f766e" stroke-width="2" marker-end="url(#arr-green)" opacity="0.8"/>
+
+  <!-- cron → 병렬 실행 -->
+  <line x1="920" y1="380" x2="1020" y2="400" stroke="#d97706" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arr-amber)" opacity="0.6"/>
+
+  <!-- 결과물 → 알림 -->
+  <line x1="800" y1="590" x2="680" y2="660" stroke="#4338ca" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arr-indigo)" opacity="0.6"/>
+
+  <!-- 결과물 → cron (반복 루프) -->
+  <path d="M 840 540 Q 840 460 880 420" stroke="#374151" stroke-width="1.5" fill="none" stroke-dasharray="4,4" marker-end="url(#arr-gray)" opacity="0.4"/>
+
+  <!-- ═══════════════ 노드들 ═══════════════ -->
+
+  <!-- ① 사용자 입력 -->
+  <g filter="url(#glow-sm)">
+    <circle cx="160" cy="210" r="58" fill="url(#g-user)" stroke="#4f46e5" stroke-width="1.5" opacity="0.95"/>
+  </g>
+  <text x="160" y="200" text-anchor="middle" font-size="22" fill="white">💬</text>
+  <text x="160" y="220" text-anchor="middle" font-size="12" font-weight="700" fill="#c7d2fe" font-family="-apple-system,sans-serif">사용자</text>
+  <text x="160" y="235" text-anchor="middle" font-size="10" fill="#818cf8" font-family="-apple-system,sans-serif">입력</text>
+
+  <!-- ② 분류 -->
+  <g filter="url(#glow-purple)">
+    <circle cx="450" cy="210" r="62" fill="url(#g-classify)" stroke="#7c3aed" stroke-width="2" opacity="0.95"/>
+  </g>
+  <text x="450" y="196" text-anchor="middle" font-size="20" fill="white">🔍</text>
+  <text x="450" y="216" text-anchor="middle" font-size="13" font-weight="700" fill="#e9d5ff" font-family="-apple-system,sans-serif">분류</text>
+  <text x="450" y="231" text-anchor="middle" font-size="10" fill="#a78bfa" font-family="-apple-system,sans-serif">Classify</text>
+
+  <!-- ③-a 빌드 보드 -->
+  <circle cx="690" cy="130" r="46" fill="url(#g-build)" stroke="#1d4ed8" stroke-width="1.5" opacity="0.9"/>
+  <text x="690" y="118" text-anchor="middle" font-size="16" fill="white">🔨</text>
+  <text x="690" y="135" text-anchor="middle" font-size="11" font-weight="700" fill="#bfdbfe" font-family="-apple-system,sans-serif">빌드 보드</text>
+  <text x="690" y="149" text-anchor="middle" font-size="9" fill="#93c5fd" font-family="-apple-system,sans-serif">프로젝트 개발</text>
+
+  <!-- ③-b 자동화 보드 -->
+  <circle cx="690" cy="210" r="46" fill="url(#g-auto)" stroke="#059669" stroke-width="1.5" opacity="0.9"/>
+  <text x="690" y="198" text-anchor="middle" font-size="16" fill="white">⚙️</text>
+  <text x="690" y="215" text-anchor="middle" font-size="11" font-weight="700" fill="#a7f3d0" font-family="-apple-system,sans-serif">자동화 보드</text>
+  <text x="690" y="229" text-anchor="middle" font-size="9" fill="#6ee7b7" font-family="-apple-system,sans-serif">반복 작업</text>
+
+  <!-- ③-c 질문 카드 -->
+  <circle cx="690" cy="290" r="46" fill="url(#g-clarify)" stroke="#d97706" stroke-width="1.5" opacity="0.9"/>
+  <text x="690" y="278" text-anchor="middle" font-size="16" fill="white">❓</text>
+  <text x="690" y="295" text-anchor="middle" font-size="11" font-weight="700" fill="#fde68a" font-family="-apple-system,sans-serif">질문 카드</text>
+  <text x="690" y="309" text-anchor="middle" font-size="9" fill="#fcd34d" font-family="-apple-system,sans-serif">Clarification</text>
+
+  <!-- ④ 하네스 생성 -->
+  <g filter="url(#glow-sm)">
+    <circle cx="920" cy="210" r="58" fill="url(#g-harness)" stroke="#0891b2" stroke-width="2" opacity="0.95"/>
+  </g>
+  <text x="920" y="196" text-anchor="middle" font-size="18" fill="white">🤖</text>
+  <text x="920" y="216" text-anchor="middle" font-size="12" font-weight="700" fill="#a5f3fc" font-family="-apple-system,sans-serif">하네스 생성</text>
+  <text x="920" y="231" text-anchor="middle" font-size="9" fill="#67e8f9" font-family="-apple-system,sans-serif">에이전트 팀 설계</text>
+
+  <!-- ⑤ 카드 생성 -->
+  <circle cx="1140" cy="210" r="46" fill="url(#g-cards)" stroke="#0284c7" stroke-width="1.5" opacity="0.9"/>
+  <text x="1140" y="198" text-anchor="middle" font-size="16" fill="white">🃏</text>
+  <text x="1140" y="215" text-anchor="middle" font-size="11" font-weight="700" fill="#bae6fd" font-family="-apple-system,sans-serif">카드 생성</text>
+  <text x="1140" y="229" text-anchor="middle" font-size="9" fill="#7dd3fc" font-family="-apple-system,sans-serif">태스크 그래프</text>
+
+  <!-- ⑥ cron 스케줄 -->
+  <circle cx="920" cy="400" r="46" fill="url(#g-cron)" stroke="#d97706" stroke-width="1.5" opacity="0.9"/>
+  <text x="920" y="388" text-anchor="middle" font-size="16" fill="white">🗓️</text>
+  <text x="920" y="405" text-anchor="middle" font-size="11" font-weight="700" fill="#fde68a" font-family="-apple-system,sans-serif">cron 등록</text>
+  <text x="920" y="419" text-anchor="middle" font-size="9" fill="#fcd34d" font-family="-apple-system,sans-serif">스케줄 자동화</text>
+
+  <!-- ⑦ 병렬 실행 -->
+  <g filter="url(#glow-purple)">
+    <circle cx="1140" cy="420" r="62" fill="url(#g-exec)" stroke="#7c3aed" stroke-width="2" opacity="0.95"/>
+  </g>
+  <text x="1140" y="404" text-anchor="middle" font-size="20" fill="white">⚡</text>
+  <text x="1140" y="424" text-anchor="middle" font-size="13" font-weight="700" fill="#e9d5ff" font-family="-apple-system,sans-serif">병렬 실행</text>
+  <text x="1140" y="440" text-anchor="middle" font-size="9" fill="#a78bfa" font-family="-apple-system,sans-serif">Claude CLI · WebSocket</text>
+
+  <!-- ⑧ 결과물 -->
+  <g filter="url(#glow-sm)">
+    <circle cx="840" cy="580" r="62" fill="url(#g-artifact)" stroke="#0f766e" stroke-width="2" opacity="0.95"/>
+  </g>
+  <text x="840" y="562" text-anchor="middle" font-size="20" fill="white">📦</text>
+  <text x="840" y="582" text-anchor="middle" font-size="13" font-weight="700" fill="#99f6e4" font-family="-apple-system,sans-serif">결과물</text>
+  <text x="840" y="598" text-anchor="middle" font-size="9" fill="#5eead4" font-family="-apple-system,sans-serif">서버 · 스크립트 실행</text>
+
+  <!-- ⑨ 알림 -->
+  <circle cx="620" cy="680" r="44" fill="url(#g-notify)" stroke="#4338ca" stroke-width="1.5" opacity="0.9"/>
+  <text x="620" y="668" text-anchor="middle" font-size="16" fill="white">🔔</text>
+  <text x="620" y="685" text-anchor="middle" font-size="11" font-weight="700" fill="#c7d2fe" font-family="-apple-system,sans-serif">알림</text>
+  <text x="620" y="699" text-anchor="middle" font-size="9" fill="#a5b4fc" font-family="-apple-system,sans-serif">Telegram · Email</text>
+
+  <!-- ═══════════════ 엣지 라벨 ═══════════════ -->
+  <rect x="270" y="190" width="48" height="18" rx="9" fill="#1e1b4b" opacity="0.9"/>
+  <text x="294" y="203" text-anchor="middle" font-size="9" fill="#818cf8" font-family="-apple-system,sans-serif">요청 전달</text>
+
+  <text x="564" y="122" text-anchor="middle" font-size="9" fill="#93c5fd" font-family="-apple-system,sans-serif">build</text>
+  <text x="564" y="202" text-anchor="middle" font-size="9" fill="#6ee7b7" font-family="-apple-system,sans-serif">automation</text>
+  <text x="562" y="282" text-anchor="middle" font-size="9" fill="#fcd34d" font-family="-apple-system,sans-serif">clarification</text>
+
+  <rect x="824" y="155" width="60" height="16" rx="8" fill="#164e63" opacity="0.9"/>
+  <text x="854" y="167" text-anchor="middle" font-size="9" fill="#67e8f9" font-family="-apple-system,sans-serif">팀 + 그래프 설계</text>
+
+  <rect x="994" y="190" width="56" height="16" rx="8" fill="#0c4a6e" opacity="0.9"/>
+  <text x="1022" y="202" text-anchor="middle" font-size="9" fill="#7dd3fc" font-family="-apple-system,sans-serif">태스크 분배</text>
+
+  <text x="630" y="368" text-anchor="middle" font-size="9" fill="#6b7280" font-family="-apple-system,sans-serif">재분류</text>
+
+  <!-- ═══════════════ 우측 범례 ═══════════════ -->
+  <rect x="1270" y="480" width="108" height="160" rx="12" fill="#111118" stroke="#1f1f2e" stroke-width="1"/>
+  <text x="1324" y="502" text-anchor="middle" font-size="10" fill="#4b5563" font-family="-apple-system,sans-serif" letter-spacing="1">LEGEND</text>
+  <circle cx="1290" cy="526" r="5" fill="#4f46e5"/>
+  <text x="1302" y="530" font-size="9" fill="#9ca3af" font-family="-apple-system,sans-serif">핵심 플로우</text>
+  <line x1="1285" y1="556" x2="1305" y2="556" stroke="#374151" stroke-width="1.5" stroke-dasharray="4,3"/>
+  <text x="1312" y="560" font-size="9" fill="#9ca3af" font-family="-apple-system,sans-serif">선택적 경로</text>
+  <line x1="1285" y1="586" x2="1305" y2="586" stroke="#374151" stroke-width="1.5" stroke-dasharray="4,4" opacity="0.5"/>
+  <text x="1312" y="590" font-size="9" fill="#9ca3af" font-family="-apple-system,sans-serif">루프백</text>
+  <circle cx="1290" cy="616" r="5" fill="none" stroke="#7c3aed" stroke-width="2"/>
+  <text x="1302" y="620" font-size="9" fill="#9ca3af" font-family="-apple-system,sans-serif">핵심 노드</text>
+
+  <!-- 하단 노트 -->
+  <text x="700" y="820" text-anchor="middle" font-size="11" fill="#374151" font-family="-apple-system,sans-serif">
+    빌드 보드는 하네스 생성 → 카드 생성 → 병렬 실행 순서로, 자동화 보드는 cron 등록 → 스케줄 트리거 → 병렬 실행 순서로 흐릅니다
+  </text>
+</svg>
+</body>
+</html>
