@@ -34,7 +34,7 @@ import notifier
 import session_logger
 import github_trending as gh_trending
 import github_oauth
-from harness import generate_harness, run_card, agents_exist_on_disk, _run_claude, update_project_memory, has_unanswered_questions, generate_auto_answers, parse_artifact
+from harness import generate_harness, run_card, agents_exist_on_disk, _run_claude, update_project_memory, has_unanswered_questions, generate_auto_answers, parse_artifact, _sanitize_sdk_usage
 
 # ── 실시간 구독자 관리 ───────────────────────────────────────────────────────
 _board_subs: dict[int, set] = {}        # board_id → set[WebSocket]
@@ -1595,6 +1595,22 @@ async def _persist_card_artifact(
         return None
 
     db.update_card_artifact(card_id, artifact["type"], cmd, artifact.get("port"), cwd)
+
+    # 보드 project_path 자동 채우기 — null이면 artifact cwd로 설정
+    card_row = db.get_card(card_id)
+    if card_row and card_row.get("board_id") and cwd:
+        _board = db.get_board(card_row["board_id"])
+        if _board and not _board.get("project_path"):
+            db.update_board_project_path(card_row["board_id"], cwd)
+            logger.info("[project_path] board_%d → %s", card_row["board_id"], cwd)
+
+    # SDK 자동 교체 — 프로젝트 파일에서 'import anthropic' 등 제거
+    sdk_fixed = _sanitize_sdk_usage(project_path)
+    if sdk_fixed:
+        sdk_warn = f"SDK 자동 교체됨: {', '.join(sdk_fixed)}"
+        warnings.append(sdk_warn)
+        logger.warning("[sdk-sanitize] card_%d %s", card_id, sdk_warn)
+
     if warnings:
         marker = "\n\n---\n**[artifact 검증 경고]**\n" + "".join(f"- {w}\n" for w in warnings)
         db.append_card_output(card_id, marker)

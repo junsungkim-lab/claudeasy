@@ -45,6 +45,92 @@ def _get_reserved_ports() -> list[int]:
     return reserved
 
 
+_SDK_IMPORT_RE = re.compile(
+    r"^(?:import anthropic\b[^\n]*|from anthropic\b[^\n]*)\n",
+    re.MULTILINE,
+)
+_SDK_USAGE_RE = re.compile(
+    r"anthropic\.Anthropic\b|\bAnthropic\(\)|ANTHROPIC_API_KEY"
+)
+
+_CLAUDE_CLI_SNIPPET = """\
+import subprocess as _subprocess, sys as _sys
+
+def _call_claude(prompt: str) -> str:
+    \"\"\"AI 텍스트 생성 — Claude CLI subprocess 사용 (Anthropic SDK 대체 불가)\"\"\"
+    _r = _subprocess.run(
+        ["claude", "-p", prompt, "--output-format", "text"],
+        capture_output=True, text=True
+    )
+    if _r.returncode != 0:
+        print(_r.stderr, file=_sys.stderr)
+        _sys.exit(1)
+    return _r.stdout.strip()
+
+# ↑ SDK 자동 교체됨 — ANTHROPIC_API_KEY 불필요, claude CLI 로그인 상태로 동작
+"""
+
+
+def _sanitize_sdk_usage(project_path: "str | None") -> list[str]:
+    """프로젝트 디렉터리에서 Anthropic SDK 사용 흔적을 자동 제거. 수정 파일 목록 반환."""
+    if not project_path:
+        return []
+    base = Path(project_path)
+    if not base.exists():
+        return []
+
+    changed: list[str] = []
+
+    # 1. Python 파일: import anthropic 라인 제거 + CLI snippet 삽입
+    for py_file in base.rglob("*.py"):
+        if any(p in py_file.parts for p in (".venv", "__pycache__", ".git", "node_modules")):
+            continue
+        try:
+            text = py_file.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            continue
+        if not _SDK_IMPORT_RE.search(text):
+            continue
+        # import 라인 제거
+        new_text = _SDK_IMPORT_RE.sub("", text)
+        # CLI snippet을 파일 맨 앞(첫 번째 비어있지 않은 코드 위)에 삽입
+        lines = new_text.splitlines(keepends=True)
+        insert_at = 0
+        for i, line in enumerate(lines):
+            s = line.strip()
+            if s.startswith("#!") or (s.startswith(('"""', "'''")) ):
+                insert_at = i + 1
+            elif s:
+                break
+        lines.insert(insert_at, _CLAUDE_CLI_SNIPPET + "\n")
+        py_file.write_text("".join(lines), encoding="utf-8")
+        changed.append(py_file.name)
+
+    # 2. requirements.txt에서 anthropic 제거
+    req = base / "requirements.txt"
+    if req.exists():
+        lines = req.read_text().splitlines()
+        filtered = [l for l in lines if not re.match(r"^\s*anthropic\b", l, re.IGNORECASE)]
+        if len(filtered) < len(lines):
+            req.write_text("\n".join(filtered) + "\n")
+            changed.append("requirements.txt")
+
+    # 3. .env.example + .env에서 ANTHROPIC_API_KEY 라인 제거
+    for env_name in (".env.example", ".env"):
+        env_f = base / env_name
+        if not env_f.exists():
+            continue
+        text = env_f.read_text()
+        new_text = re.sub(
+            r"^#?\s*ANTHROPIC_API_KEY\s*=.*\n?", "", text, flags=re.MULTILINE
+        )
+        if new_text != text:
+            env_f.write_text(new_text)
+            changed.append(env_name)
+
+    return changed
+
+
 _SERVER_PATTERN = re.compile(
     r"uvicorn|flask|streamlit|gunicorn|hypercorn|daphne|next dev|next start|vite|--port|:\d{4,5}"
 )
@@ -208,9 +294,21 @@ And the main run script MUST read from this queue to get its topic/input (do NOT
 Use `run_daily.py` (or equivalent) as the artifact run_command — it reads one item from the queue each run.
 If the project does NOT involve dynamic content input (e.g. data pipelines, health checks, scrapers with fixed targets), do NOT create topic_queue.json.
 
-## ⚠️ AI 호출은 반드시 Claude CLI 사용 (ABSOLUTE PRIORITY)
-- `anthropic` Python SDK, `import anthropic`, `Anthropic()` 클라이언트 사용 **금지**
-- AI 텍스트 생성이 필요하면 Claude CLI subprocess로 호출할 것:
+## ⚠️ CRITICAL — AI 호출 규칙 (위반 시 고객 프로젝트 즉시 실패)
+
+이 플랫폼에서는 Anthropic Python SDK(`pip install anthropic`)가 **설치되어 있지 않으며 절대 작동하지 않습니다**.
+SDK를 사용하면 `ModuleNotFoundError: No module named 'anthropic'` 오류로 고객 프로젝트가 즉시 실패합니다.
+
+**절대 금지:**
+- `import anthropic` — 금지
+- `from anthropic import ...` — 금지
+- `Anthropic()` 클라이언트 인스턴스화 — 금지
+- `client.messages.create(...)` — 금지
+- `ANTHROPIC_API_KEY` 환경변수 읽기 — 금지 (불필요)
+- `requirements.txt`에 `anthropic` 추가 — 금지
+- `.env.example`에 `ANTHROPIC_API_KEY` 추가 — 금지
+
+**AI 텍스트 생성이 필요하면 반드시 이 패턴만 사용:**
 
 ```python
 import subprocess, sys
@@ -226,8 +324,7 @@ def call_claude(prompt: str) -> str:
     return result.stdout.strip()
 ```
 
-- `ANTHROPIC_API_KEY` 환경변수 불필요 → `.env.example`에 포함하지 말 것
-- `anthropic`을 `requirements.txt`에 추가하지 말 것
+claude CLI는 이미 인증되어 있으며 API 키 없이 동작합니다.
 """
 
 
@@ -327,7 +424,7 @@ In the JSON "agents" array, use the bare agent name (e.g. "researcher").
 
 3. **All tasks share ONE project directory.** The first task picks the directory path; every subsequent task (including integration/test tasks) uses that EXACT same path. Never create sibling directories like `*-test`, `*-v2`, `*-integration`. artifact `cwd` MUST equal the shared project directory.
 
-4. **AI 호출은 Claude CLI만 사용.** `import anthropic` 및 Anthropic SDK 사용 금지. AI 텍스트 생성은 `subprocess.run(["claude", "-p", prompt, "--output-format", "text"], ...)` 로만 처리. `ANTHROPIC_API_KEY` 환경변수 불필요.
+4. **CRITICAL — AI 호출 규칙:** 이 플랫폼에서 Anthropic Python SDK는 **설치되어 있지 않으며** 사용 시 `ModuleNotFoundError: No module named 'anthropic'`로 즉시 실패합니다. `import anthropic`, `from anthropic import ...`, `Anthropic()`, `client.messages.create(...)`, `ANTHROPIC_API_KEY` 환경변수, `requirements.txt`에 `anthropic` 추가 — 모두 절대 금지. AI 텍스트 생성은 `subprocess.run(["claude", "-p", prompt, "--output-format", "text"], capture_output=True, text=True)` 로만 처리.
 
 
 """
@@ -390,7 +487,7 @@ In the JSON "agents" array, use only the bare agent name WITHOUT the prefix (e.g
 
 3. **All tasks share ONE project directory.** The first task picks the directory path; every subsequent task (including integration/test tasks) uses that EXACT same path. Never create sibling directories like `*-test`, `*-v2`, `*-integration`. artifact `cwd` MUST equal the shared project directory.
 
-4. **AI 호출은 Claude CLI만 사용.** `import anthropic` 및 Anthropic SDK 사용 금지. AI 텍스트 생성은 `subprocess.run(["claude", "-p", prompt, "--output-format", "text"], ...)` 로만 처리. `ANTHROPIC_API_KEY` 환경변수 불필요.
+4. **CRITICAL — AI 호출 규칙:** 이 플랫폼에서 Anthropic Python SDK는 **설치되어 있지 않으며** 사용 시 `ModuleNotFoundError: No module named 'anthropic'`로 즉시 실패합니다. `import anthropic`, `from anthropic import ...`, `Anthropic()`, `client.messages.create(...)`, `ANTHROPIC_API_KEY` 환경변수, `requirements.txt`에 `anthropic` 추가 — 모두 절대 금지. AI 텍스트 생성은 `subprocess.run(["claude", "-p", prompt, "--output-format", "text"], capture_output=True, text=True)` 로만 처리.
 
 
 """
@@ -505,9 +602,13 @@ Your task: create a single, reusable Python module that can be called as a stand
 - Exit with code 0 on success, non-zero on failure
 - Keep it simple: one file, one purpose
 
-## ⚠️ AI 호출 규칙 (ABSOLUTE PRIORITY)
-- `anthropic` SDK, `import anthropic`, `Anthropic()` 클라이언트 사용 **금지**
-- AI 텍스트 생성은 Claude CLI subprocess로만 호출:
+## ⚠️ CRITICAL — AI 호출 규칙 (위반 시 즉시 실패)
+
+이 플랫폼에서 Anthropic Python SDK는 **설치되어 있지 않으며** 사용 시 `ModuleNotFoundError: No module named 'anthropic'`로 즉시 실패합니다.
+
+**절대 금지:** `import anthropic`, `from anthropic import ...`, `Anthropic()`, `client.messages.create(...)`, `ANTHROPIC_API_KEY` 환경변수, `requirements.txt`에 `anthropic` 추가, `.env.example`에 `ANTHROPIC_API_KEY` 추가
+
+**AI 텍스트 생성은 반드시 이 패턴만 사용:**
 
 ```python
 import subprocess, sys
@@ -523,7 +624,7 @@ def call_claude(prompt: str) -> str:
     return result.stdout.strip()
 ```
 
-- `ANTHROPIC_API_KEY` 불필요 → `.env.example`과 `requirements.txt`에 포함하지 말 것
+claude CLI는 이미 인증되어 있으며 API 키 없이 동작합니다.
 
 ## Topic Queue (Content-Driven Automation)
 If this tool involves REPETITIVE CONTENT CREATION that needs dynamic input (blog, social media, newsletter, product reviews, etc.):
