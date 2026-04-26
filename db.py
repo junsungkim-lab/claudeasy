@@ -393,6 +393,11 @@ def update_card_artifact(card_id: int, artifact_type: str, run_command: str,
         )
 
 
+def update_card_artifact_cwd(card_id: int, cwd: str):
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("UPDATE cards SET artifact_cwd=? WHERE id=?", (cwd, card_id))
+
+
 # ── Agents ───────────────────────────────────────────────────────────────────
 
 AGENT_COLORS = ["#6366f1", "#ec4899", "#f59e0b", "#10b981", "#3b82f6", "#8b5cf6", "#ef4444"]

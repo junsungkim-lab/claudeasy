@@ -1,5 +1,5 @@
-import { useState, useEffect } from "react";
-import { Play, Square, ExternalLink, ArrowLeft, Terminal, Clock, RefreshCw, Folder } from "lucide-react";
+import { useState, useEffect, useCallback } from "react";
+import { Play, Square, ExternalLink, ArrowLeft, Terminal, Clock, RefreshCw, Folder, AlertTriangle } from "lucide-react";
 import { useRuns, useRunCards } from "@/hooks/queries/use-runs";
 import { useBoards } from "@/hooks/queries/use-boards";
 import { useAutomation } from "@/hooks/queries/use-automation";
@@ -10,11 +10,22 @@ import { cn } from "@/lib/utils";
 import { ArtifactEnvForm } from "./artifact-env-form";
 import type { Card } from "@/api/client";
 
+// artifact_검증 경고 마커를 카드 output에서 추출
+function _parseArtifactWarnings(output: string | null | undefined): string[] {
+  if (!output) return [];
+  const m = output.match(/\*\*\[artifact 검증 경고\]\*\*\n((?:- .+\n?)+)/);
+  if (!m) return [];
+  return m[1].trim().split("\n").map((l) => l.replace(/^- /, "").trim()).filter(Boolean);
+}
+
 function ArtifactRow({ card }: { card: Card }) {
   const [running, setRunning] = useState(false);
   const [pid, setPid] = useState<number | null>(null);
   const [port, setPort] = useState<number | null>(null);
   const [envReady, setEnvReady] = useState(true);
+  const [runError, setRunError] = useState<string | null>(null);
+
+  const warnings = _parseArtifactWarnings(card.output);
 
   useEffect(() => {
     fetch(`/api/cards/${card.id}/run-status`)
@@ -27,26 +38,62 @@ function ArtifactRow({ card }: { card: Card }) {
       .catch(() => {});
   }, [card.id]);
 
-  const handleRun = async () => {
+  // card WS 이벤트 구독 (artifact_started / artifact_failed / artifact_stopped)
+  useEffect(() => {
+    const ws = new WebSocket(`ws://${location.host}/ws/card/${card.id}`);
+    ws.onmessage = (e) => {
+      try {
+        const ev = JSON.parse(e.data);
+        if (ev.type === "artifact_started") {
+          setRunning(true);
+          setPid(ev.pid ?? null);
+          setPort(ev.port ?? null);
+          setRunError(null);
+        } else if (ev.type === "artifact_failed") {
+          setRunning(false);
+          setPid(null);
+          setRunError(ev.stderr_tail || `종료 코드 ${ev.rc}`);
+        } else if (ev.type === "artifact_stopped") {
+          setRunning(false);
+          setPid(null);
+        }
+      } catch {}
+    };
+    return () => ws.close();
+  }, [card.id]);
+
+  const handleRun = useCallback(async () => {
+    setRunError(null);
     const res = await fetch(`/api/cards/${card.id}/run`, { method: "POST" });
     const data = await res.json();
+    if (data.error) { setRunError(data.error); return; }
     if (data.pid) { setRunning(true); setPid(data.pid); }
     if (data.port) setPort(data.port);
-  };
+  }, [card.id]);
 
-  const handleStop = async () => {
+  const handleStop = useCallback(async () => {
     await fetch(`/api/cards/${card.id}/stop`, { method: "POST" });
     setRunning(false);
     setPid(null);
     setPort(null);
-  };
+  }, [card.id]);
 
   return (
     <div className="border border-gray-200 rounded-xl bg-white p-4 space-y-3">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="text-sm font-semibold text-gray-900 truncate">{card.title}</p>
-          <p className="text-[11px] text-gray-400 mt-0.5 font-mono truncate">{card.artifact_cwd}</p>
+          <div className="flex items-center gap-1.5 mt-0.5">
+            <p className="text-[11px] text-gray-400 font-mono truncate">{card.artifact_cwd}</p>
+            {warnings.length > 0 && (
+              <span
+                title={warnings.join("\n")}
+                className="inline-flex items-center gap-0.5 text-[10px] text-amber-600 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5 cursor-help shrink-0"
+              >
+                <AlertTriangle size={9} /> 경고 {warnings.length}
+              </span>
+            )}
+          </div>
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
           <Badge variant="secondary" className="text-[10px] h-5">{card.agent_role}</Badge>
@@ -99,6 +146,13 @@ function ArtifactRow({ card }: { card: Card }) {
           </Button>
         )}
       </div>
+
+      {runError && (
+        <div className="bg-red-50 border border-red-200 rounded-lg px-3 py-2 space-y-1">
+          <p className="text-[10px] font-semibold text-red-700">실행 실패</p>
+          <pre className="text-[10px] text-red-600 font-mono whitespace-pre-wrap break-all max-h-32 overflow-y-auto">{runError}</pre>
+        </div>
+      )}
     </div>
   );
 }

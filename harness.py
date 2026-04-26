@@ -45,6 +45,56 @@ def _get_reserved_ports() -> list[int]:
     return reserved
 
 
+_SERVER_PATTERN = re.compile(
+    r"uvicorn|flask|streamlit|gunicorn|hypercorn|daphne|next dev|next start|vite|--port|:\d{4,5}"
+)
+
+
+def _normalize_artifact(data: dict, project_path: str | None) -> tuple[dict | None, list[str]]:
+    """LLM emit 값을 정규화·검증. 거부 시 (None, [사유]), 통과 시 (artifact, warnings)."""
+    import shlex
+    warnings: list[str] = []
+
+    cmd = (data.get("run_command") or "").strip()
+    if not cmd:
+        return None, ["run_command 비어있음"]
+    try:
+        tokens = shlex.split(cmd)
+    except ValueError as e:
+        return None, [f"run_command 파싱 실패: {e}"]
+    # 마지막 토큰이 단독 --flag 이면 값 누락 의심
+    if tokens and tokens[-1].startswith("--") and "=" not in tokens[-1]:
+        warnings.append(f"인수 값 누락 의심: {tokens[-1]}")
+
+    # cwd: 화이트리스트 (project_path 하위 강제)
+    cwd = (data.get("cwd") or "").strip() or project_path
+    if project_path and cwd:
+        try:
+            if not Path(cwd).resolve().is_relative_to(Path(project_path).resolve()):
+                warnings.append(f"cwd 보정: {Path(cwd).name} → project_path")
+                cwd = project_path
+        except Exception:
+            cwd = project_path
+
+    # type: server 키워드 없는데 server 선언이면 script로 강등
+    declared = data.get("type")
+    if declared not in ("server", "script"):
+        declared = None
+    if declared == "server" and not _SERVER_PATTERN.search(cmd):
+        warnings.append("type 강등: server → script (서버 키워드 없음)")
+        declared = "script"
+    if not declared:
+        declared = "server" if _SERVER_PATTERN.search(cmd) else "script"
+
+    return {
+        "type": declared,
+        "run_command": cmd,
+        "port": data.get("port"),
+        "cwd": cwd,
+        "_warnings": warnings,
+    }, warnings
+
+
 def parse_artifact(output: str, project_path: str = None) -> dict | None:
     """카드 output에서 ```artifact 블록을 파싱해 반환.
     없으면 출력 텍스트에서 실행 명령 패턴을 fallback 감지.
@@ -54,15 +104,10 @@ def parse_artifact(output: str, project_path: str = None) -> dict | None:
     if match:
         try:
             data = json.loads(match.group(1))
-            artifact_type = data.get("type")
-            if artifact_type not in ("server", "script"):
+            if data.get("type") not in ("server", "script"):
                 return None
-            return {
-                "type": artifact_type,
-                "run_command": data.get("run_command", ""),
-                "port": data.get("port"),
-                "cwd": data.get("cwd") or project_path,
-            }
+            normalized, _ = _normalize_artifact(data, project_path)
+            return normalized
         except (json.JSONDecodeError, KeyError):
             pass
 
