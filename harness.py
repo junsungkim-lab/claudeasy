@@ -197,6 +197,17 @@ All tasks in this board share ONE project directory.
 - Integration/test tasks MUST NOT create a new sibling folder (e.g. *-test, *-v2, *-integration, *-beer-blog).
 - artifact cwd MUST equal the shared project directory, never a sibling.
 
+## Topic Queue (Content-Driven Automation)
+If this project involves REPETITIVE CONTENT CREATION that requires dynamic input — such as:
+blog posts, social media posts, newsletters, product reviews, news summaries, email campaigns —
+the FIRST task MUST create a `topic_queue.json` file in the project root with this exact content:
+```json
+{{"queue": [], "history": []}}
+```
+And the main run script MUST read from this queue to get its topic/input (do NOT hardcode topics).
+Use `run_daily.py` (or equivalent) as the artifact run_command — it reads one item from the queue each run.
+If the project does NOT involve dynamic content input (e.g. data pipelines, health checks, scrapers with fixed targets), do NOT create topic_queue.json.
+
 ## ⚠️ AI 호출은 반드시 Claude CLI 사용 (ABSOLUTE PRIORITY)
 - `anthropic` Python SDK, `import anthropic`, `Anthropic()` 클라이언트 사용 **금지**
 - AI 텍스트 생성이 필요하면 Claude CLI subprocess로 호출할 것:
@@ -513,6 +524,12 @@ def call_claude(prompt: str) -> str:
 ```
 
 - `ANTHROPIC_API_KEY` 불필요 → `.env.example`과 `requirements.txt`에 포함하지 말 것
+
+## Topic Queue (Content-Driven Automation)
+If this tool involves REPETITIVE CONTENT CREATION that needs dynamic input (blog, social media, newsletter, product reviews, etc.):
+- Create `topic_queue.json` in the tool_dir with content: `{{"queue": [], "history": []}}`
+- The script MUST read its topic from the queue (pop first item), NOT use hardcoded topics
+- Log each run result back to `history` in topic_queue.json
 
 ## Output format
 Write the Python file, then .env.example, then requirements.txt entries.

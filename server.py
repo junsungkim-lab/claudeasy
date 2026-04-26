@@ -928,6 +928,21 @@ async def get_topic_queue(board_id: int):
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 
+@app.post("/api/boards/{board_id}/topic-queue/init")
+async def init_topic_queue(board_id: int):
+    """topic_queue.json이 없는 보드에 빈 큐 파일을 생성해 큐 관리 UI를 활성화."""
+    board = db.get_board(board_id)
+    if not board or not board.get("project_path"):
+        return JSONResponse(status_code=400, content={"error": "project_path가 설정되지 않은 보드입니다"})
+    pp = Path(board["project_path"])
+    if not pp.exists():
+        return JSONResponse(status_code=400, content={"error": f"프로젝트 디렉터리 없음: {pp}"})
+    qf = pp / "topic_queue.json"
+    if not qf.exists():
+        qf.write_text(json.dumps({"queue": [], "history": []}, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {"ok": True}
+
+
 @app.post("/api/boards/{board_id}/topic-queue")
 async def add_topic_queue(board_id: int, request: Request):
     board = db.get_board(board_id)

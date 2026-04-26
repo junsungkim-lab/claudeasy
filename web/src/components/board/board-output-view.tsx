@@ -281,16 +281,27 @@ function TopicQueuePanel({ boardId }: { boardId: number }) {
   const [inputValue, setInputValue] = useState("");
   const [inputDetail, setInputDetail] = useState("");
   const [adding, setAdding] = useState(false);
+  const [hasQueue, setHasQueue] = useState<boolean | null>(null); // null=로딩중, false=없음, true=있음
+  const [initing, setIniting] = useState(false);
 
   const load = useCallback(async () => {
     const res = await fetch(`/api/boards/${boardId}/topic-queue`);
-    if (!res.ok) return; // topic_queue.json 없는 보드는 패널 미표시
+    if (!res.ok) { setHasQueue(false); return; }
     const data = await res.json();
+    setHasQueue(true);
     setQueue(data.queue ?? []);
     setHistory((data.history ?? []).slice(-5).reverse());
   }, [boardId]);
 
   useEffect(() => { load(); }, [load]);
+
+  const handleInit = async () => {
+    setIniting(true);
+    try {
+      const res = await fetch(`/api/boards/${boardId}/topic-queue/init`, { method: "POST" });
+      if (res.ok) await load();
+    } finally { setIniting(false); }
+  };
 
   const handleAdd = async () => {
     const value = inputValue.trim();
@@ -312,14 +323,32 @@ function TopicQueuePanel({ boardId }: { boardId: number }) {
     await load();
   };
 
-  if (queue === null) return null; // topic_queue.json 없는 보드 → 패널 숨김
+  if (hasQueue === null) return null; // 로딩 중
+
+  // topic_queue.json 없는 보드 → "발행 큐 추가" 버튼만 표시
+  if (!hasQueue) {
+    return (
+      <div className="border border-dashed border-gray-200 rounded-xl p-4 flex items-center justify-between">
+        <div>
+          <p className="text-[12px] font-medium text-gray-600">발행 대기 큐</p>
+          <p className="text-[11px] text-gray-400 mt-0.5">주제/URL을 미리 쌓아두고 순서대로 자동 발행</p>
+        </div>
+        <Button size="sm" variant="outline" onClick={handleInit} disabled={initing} className="h-8 px-3 text-[11px] shrink-0">
+          <Plus size={11} />
+          {initing ? "생성 중..." : "큐 추가"}
+        </Button>
+      </div>
+    );
+  }
+
+  const safeQueue = queue ?? [];
 
   return (
     <div className="border border-gray-200 rounded-xl bg-white p-4 space-y-4">
       <div className="flex items-center gap-2">
         <ListOrdered size={13} className="text-indigo-500" />
         <span className="text-[13px] font-semibold text-gray-800">발행 대기 큐</span>
-        <span className="ml-auto text-[10px] text-gray-400">{queue.length}개 대기 중</span>
+        <span className="ml-auto text-[10px] text-gray-400">{safeQueue.length}개 대기 중</span>
       </div>
 
       {/* 추가 입력 */}
@@ -345,11 +374,11 @@ function TopicQueuePanel({ boardId }: { boardId: number }) {
       </div>
 
       {/* 대기 목록 */}
-      {queue.length === 0 ? (
+      {safeQueue.length === 0 ? (
         <p className="text-[11px] text-gray-400 text-center py-3">대기 중인 항목이 없습니다</p>
       ) : (
         <div className="space-y-1.5">
-          {queue.map((item, i) => (
+          {safeQueue.map((item, i) => (
             <div key={i} className="flex items-start gap-2 bg-gray-50 rounded-lg px-3 py-2">
               <span className="text-[10px] text-gray-400 shrink-0 mt-0.5 w-4">{i + 1}</span>
               {item.type === "url"
