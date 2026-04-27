@@ -42,9 +42,10 @@ export function Sidebar() {
   const { data: projects = [], refetch: refetchProjects, isFetching: fetchingProjects } = useProjects();
   const { mutate: deleteBoard } = useDeleteBoard();
 
+  const projectPaths = new Set(projects.map((p: any) => p.path));
   const filteredBoards = selectedProjectPath
     ? boards.filter((b) => b.project_path === selectedProjectPath)
-    : boards.filter((b) => !b.project_path);
+    : boards.filter((b) => !b.project_path || !projectPaths.has(b.project_path));
 
   return (
     <aside className="w-56 shrink-0 border-r border-gray-200 bg-white flex flex-col overflow-hidden">
