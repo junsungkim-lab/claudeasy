@@ -313,7 +313,7 @@ function ScheduledSection() {
   if (scheduled.length === 0) return null;
 
   return (
-    <div className="border-t border-gray-200 bg-gray-50/60">
+    <div className="border-t border-gray-200">
       <div className="flex items-center gap-1.5 px-3 pt-2 pb-1">
         <Clock size={10} className="text-gray-400" />
         <span className="text-[10px] font-medium text-gray-400 uppercase tracking-wider">
