@@ -117,24 +117,24 @@ export function Sidebar() {
         ))}
       </div>
 
-      {/* Section content — 스크롤 가능 영역 */}
+      {/* Section content — 전체 단일 스크롤 */}
       <div className="flex-1 overflow-y-auto min-h-0">
         {sidebarSection === "boards" && (
-          <BoardsSection
-            boards={filteredBoards}
-            selectedBoardId={selectedBoardId}
-            onSelect={setSelectedBoard}
-            onDelete={(id: number) => deleteBoard({ boardId: id })}
-          />
+          <>
+            <BoardsSection
+              boards={filteredBoards}
+              selectedBoardId={selectedBoardId}
+              onSelect={setSelectedBoard}
+              onDelete={(id: number) => deleteBoard({ boardId: id })}
+            />
+            <ScheduledSection />
+          </>
         )}
         {sidebarSection === "library" && <LibrarySection />}
         {sidebarSection === "history" && (
           <HistorySection onOpen={openHistoryDrawer} />
         )}
       </div>
-
-      {/* 스케줄됨 — 항상 하단 고정, 자체 스크롤 */}
-      {sidebarSection === "boards" && <ScheduledSection />}
     </aside>
   );
 }
@@ -323,7 +323,7 @@ function ScheduledSection() {
           {scheduled.length}
         </span>
       </div>
-      <div className="overflow-y-auto max-h-44 px-2 pb-2 space-y-0.5">
+      <div className="px-2 pb-2 space-y-0.5">
         {scheduled.map((b) => {
           const isTriggering = triggering && triggeringId === b.id;
           return (
