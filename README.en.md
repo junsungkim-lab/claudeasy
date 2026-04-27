@@ -4,22 +4,19 @@
 
 **[한국어](README.md) | English**
 
-![Request Flow](docs/diagram-nodes.png)
+```mermaid
+flowchart LR
+    A([💬 Natural language request]) --> B[🤖 Agent team auto-assembled]
+    B --> C[⚡ Parallel card execution · live stream]
+    C --> D{Output}
+    D --> E[🌐 Web server auto-port]
+    D --> F[▶️ Run script]
+    D --> G[📋 Publish queue]
+    D --> H[🗓️ Schedule registered]
+```
 
 Describe what you want, and AI assembles a team of specialists, breaks it into tasks, and builds it in real time.  
 No coding required — from automation scripts to web apps and recurring bots.
-
----
-
-## Execution Flow
-
-![4-Step Execution Flow](docs/diagram-flow.png)
-
----
-
-## System Architecture
-
-![System Architecture](docs/diagram-arch.png)
 
 ---
 
