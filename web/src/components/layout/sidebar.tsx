@@ -75,21 +75,23 @@ export function Sidebar() {
           <FolderOpen size={12} />
           <span className="truncate">Global</span>
         </button>
-        {projects.map((p: ProjectInfo) => (
-          <button
-            key={p.path}
-            onClick={() => setSelectedProject(p.path)}
-            className={cn(
-              "w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-[12px] transition-colors",
-              selectedProjectPath === p.path
-                ? "bg-gray-100 text-gray-900"
-                : "text-gray-500 hover:bg-gray-100 hover:text-gray-900"
-            )}
-          >
-            <FolderOpen size={12} />
-            <span className="truncate">{p.name}</span>
-          </button>
-        ))}
+        <div className="overflow-y-auto max-h-40 mt-0.5">
+          {projects.map((p: ProjectInfo) => (
+            <button
+              key={p.path}
+              onClick={() => setSelectedProject(p.path)}
+              className={cn(
+                "w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-[12px] transition-colors",
+                selectedProjectPath === p.path
+                  ? "bg-gray-100 text-gray-900"
+                  : "text-gray-500 hover:bg-gray-100 hover:text-gray-900"
+              )}
+            >
+              <FolderOpen size={12} />
+              <span className="truncate">{p.name}</span>
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Section tabs */}
