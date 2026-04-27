@@ -740,6 +740,17 @@ async def create_board(body: dict):
         else:
             # Build 흐름 (기본)
             db.update_board_fields(board_id, {"task_kind": "build"})
+
+            # project_path가 없는 글로벌 보드는 전용 디렉터리 미리 생성 후 DB에 등록
+            # → LLM이 정확한 경로를 알고 artifact cwd에 올바르게 기록
+            if not project_path:
+                slug = re.sub(r"[^a-z0-9]+", "-", user_request[:40].lower()).strip("-")
+                auto_dir = Path.home() / "Documents" / "claudeasy-projects" / f"{board_id}-{slug}"
+                auto_dir.mkdir(parents=True, exist_ok=True)
+                project_path = str(auto_dir)
+                db.update_board_project_path(board_id, project_path)
+                logger.info("[create_board] board_%d project_path 자동 할당: %s", board_id, project_path)
+
             # 분류 오판 안전망: 스케줄 키워드가 있으면 cron 자동 등록
             _auto_cron = _parse_schedule_intent(user_request)
             if _auto_cron:
