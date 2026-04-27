@@ -117,24 +117,24 @@ export function Sidebar() {
         ))}
       </div>
 
-      {/* Section content */}
-      <div className="flex-1 overflow-y-auto">
+      {/* Section content — 스크롤 가능 영역 */}
+      <div className="flex-1 overflow-y-auto min-h-0">
         {sidebarSection === "boards" && (
-          <>
-            <BoardsSection
-              boards={filteredBoards}
-              selectedBoardId={selectedBoardId}
-              onSelect={setSelectedBoard}
-              onDelete={(id: number) => deleteBoard({ boardId: id })}
-            />
-            <ScheduledSection />
-          </>
+          <BoardsSection
+            boards={filteredBoards}
+            selectedBoardId={selectedBoardId}
+            onSelect={setSelectedBoard}
+            onDelete={(id: number) => deleteBoard({ boardId: id })}
+          />
         )}
         {sidebarSection === "library" && <LibrarySection />}
         {sidebarSection === "history" && (
           <HistorySection onOpen={openHistoryDrawer} />
         )}
       </div>
+
+      {/* 스케줄됨 — 항상 하단 고정, 자체 스크롤 */}
+      {sidebarSection === "boards" && <ScheduledSection />}
     </aside>
   );
 }
@@ -153,9 +153,10 @@ function BoardsSection({
   return (
     <div className="p-2 space-y-0.5">
       {boards.length === 0 && (
-        <p className="text-[11px] text-gray-500 text-center py-6">
-          보드가 없습니다
-        </p>
+        <div className="flex flex-col items-center justify-center py-10 gap-2 text-gray-300">
+          <LayoutGrid size={22} strokeWidth={1.5} />
+          <p className="text-[11px] text-gray-400">아직 보드가 없습니다</p>
+        </div>
       )}
       {boards.map((b) => (
         <div
@@ -312,14 +313,17 @@ function ScheduledSection() {
   if (scheduled.length === 0) return null;
 
   return (
-    <div className="px-2 pb-2 border-t border-gray-100 mt-1 pt-2">
-      <div className="flex items-center gap-1.5 px-1 mb-1.5">
+    <div className="border-t border-gray-200 bg-gray-50/60">
+      <div className="flex items-center gap-1.5 px-3 pt-2 pb-1">
         <Clock size={10} className="text-gray-400" />
         <span className="text-[10px] font-medium text-gray-400 uppercase tracking-wider">
           스케줄됨
         </span>
+        <span className="ml-auto text-[9px] bg-gray-200 text-gray-500 rounded-full px-1.5 py-0.5 font-medium">
+          {scheduled.length}
+        </span>
       </div>
-      <div className="space-y-0.5">
+      <div className="overflow-y-auto max-h-44 px-2 pb-2 space-y-0.5">
         {scheduled.map((b) => {
           const isTriggering = triggering && triggeringId === b.id;
           return (
