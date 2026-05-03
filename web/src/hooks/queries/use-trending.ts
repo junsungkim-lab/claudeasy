@@ -37,15 +37,17 @@ export function useApplyTrending() {
       owner = "",
       repo = "",
       project_path,
+      approval_mode = "manual",
     }: {
       analysis: string;
       owner?: string;
       repo?: string;
       project_path: string | null;
+      approval_mode?: "auto" | "manual";
     }) =>
       api("/api/trending/apply", {
         method: "POST",
-        body: JSON.stringify({ analysis, owner, repo, project_path }),
+        body: JSON.stringify({ analysis, owner, repo, project_path, approval_mode }),
       }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["boards"] }),
   });

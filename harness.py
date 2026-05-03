@@ -148,11 +148,8 @@ def _normalize_artifact(data: dict, project_path: "str | None") -> "tuple[dict |
         tokens = shlex.split(cmd)
     except ValueError as e:
         return None, [f"run_command 파싱 실패: {e}"]
-    # 마지막 토큰이 단독 --flag 이면 값 누락 의심
-    if tokens and tokens[-1].startswith("--") and "=" not in tokens[-1]:
-        warnings.append(f"인수 값 누락 의심: {tokens[-1]}")
 
-    # cwd: 화이트리스트 (project_path 하위 강제)
+    # cwd 먼저 확정 (trailing flag 교체 탐색에 필요)
     cwd = (data.get("cwd") or "").strip() or project_path
     if project_path and cwd:
         try:
@@ -161,6 +158,29 @@ def _normalize_artifact(data: dict, project_path: "str | None") -> "tuple[dict |
                 cwd = project_path
         except Exception:
             cwd = project_path
+
+    # 마지막 토큰이 단독 --flag 이면 값 누락 → runner 스크립트로 교체 시도
+    if tokens and tokens[-1].startswith("--") and "=" not in tokens[-1]:
+        dangling = tokens[-1]
+        warnings.append(f"인수 값 누락: {dangling} — runner 스크립트 탐색")
+        replaced = False
+        if cwd and Path(cwd).exists():
+            _RUNNER_CANDIDATES = [
+                "run_daily.py", "run.py", "runner.py", "daily.py",
+                "run_daily.sh", "run.sh", "runner.sh",
+            ]
+            for candidate in _RUNNER_CANDIDATES:
+                if (Path(cwd) / candidate).exists():
+                    interp = "python3" if candidate.endswith(".py") else "bash"
+                    cmd = f"{interp} {candidate}"
+                    tokens = [interp, candidate]
+                    warnings.append(f"run_command 교체: {interp} {candidate}")
+                    replaced = True
+                    break
+        if not replaced:
+            tokens = tokens[:-1]
+            cmd = shlex.join(tokens) if tokens else cmd
+            warnings.append(f"인수 값 누락 flag 제거: {cmd}")
 
     # type: server 키워드 없는데 server 선언이면 script로 강등
     declared = data.get("type")
@@ -374,11 +394,11 @@ def get_agent_prefix(project_path: str = None) -> str:
 HARNESS_SYSTEM_PROJECT = """You are the Harness Agent Team & Skill Architect.
 
 Analyze the user's request and:
-1. Generate agent definition files to ~/.claude/agents/{{name}}.md
-   (IMPORTANT: agents are ALWAYS global — never create agent files inside the project directory)
+1. Generate agent definition files to {project_agents_dir}/{{name}}.md
+   (IMPORTANT: agents MUST be project-specific — write to {project_agents_dir}, NEVER to ~/.claude/agents/)
 2. Generate skill files to {project_skills_dir}/{{name}}/SKILL.md
 3. Generate orchestrator to {project_skills_dir}/orchestrator/SKILL.md
-4. Use absolute paths.
+4. Use absolute paths. All file paths in agent definitions must reference the project directory shown in the context, NOT any other pre-existing directory.
 
 After generating files, output EXACTLY this JSON block (nothing else after it):
 
@@ -425,6 +445,22 @@ In the JSON "agents" array, use the bare agent name (e.g. "researcher").
 3. **All tasks share ONE project directory.** The first task picks the directory path; every subsequent task (including integration/test tasks) uses that EXACT same path. Never create sibling directories like `*-test`, `*-v2`, `*-integration`. artifact `cwd` MUST equal the shared project directory.
 
 4. **CRITICAL — AI 호출 규칙:** 이 플랫폼에서 Anthropic Python SDK는 **설치되어 있지 않으며** 사용 시 `ModuleNotFoundError: No module named 'anthropic'`로 즉시 실패합니다. `import anthropic`, `from anthropic import ...`, `Anthropic()`, `client.messages.create(...)`, `ANTHROPIC_API_KEY` 환경변수, `requirements.txt`에 `anthropic` 추가 — 모두 절대 금지. AI 텍스트 생성은 `subprocess.run(["claude", "-p", prompt, "--output-format", "text"], capture_output=True, text=True)` 로만 처리.
+
+5. **CRITICAL — 크리덴셜/설정값 규칙:** 코드가 API 키·로그인 ID/PW·토큰·블로그 아이디·계정 정보 등 사용자 고유 값을 필요로 하면:
+   - 반드시 **첫 번째 태스크**에서 `.env.example` 파일을 프로젝트 루트에 생성하라. 형식: `KEY=설명문구`. 예: `NAVER_BLOG_ID=네이버 블로그 아이디 (예: myblog123)`. `.env.example`이 있으면 시스템이 자동으로 사용자에게 값을 입력받는 폼 카드를 만든다.
+   - **절대 금지**: 태스크 출력 텍스트에 "값을 알려주세요", "입력해주세요" 등의 문구로 크리덴셜을 요청하는 것 — 이는 비개발자 사용자가 대응할 수 없다. `.env.example`만 생성하면 시스템이 UI 폼을 자동 제공한다.
+   - 하드코딩 절대 금지. 모든 민감 값은 `os.environ.get('KEY', '')` 또는 `python-dotenv`로만 읽는다.
+
+6. **CRITICAL — 런타임 멘토 규칙:** 외부 인증(브라우저 로그인·OAuth·쿠키·세션)이 필요한 코드는 반드시 자동 로그인 패턴(`ensure_logged_in()`)을 사용하라. 실패 시 `sys.exit(1)` + 명확한 stderr 메시지 필수. 시스템이 stderr를 분석해 `runtime_guide` 카드를 자동 생성하므로 사용자가 직접 명령어를 입력할 필요가 없다.
+
+7. **CRITICAL — 공식 API 우선 규칙:** 외부 서비스(블로그·SNS·이메일·쇼핑몰 등)와 연동할 때 **반드시 공식 REST API·SDK를 먼저 사용하라.** Playwright·Selenium 등 브라우저 자동화(DOM 스크래핑)는 공식 API가 존재하지 않는 경우에만 최후 수단으로 허용. 이유: DOM 구조는 언제든 변경될 수 있어 유지보수 비용이 폭발하지만 공식 API는 안정적이다. 예: Medium → `POST https://api.medium.com/v1/users/{{id}}/posts`, Tistory → Tistory Open API, Instagram → Meta Graph API. **주의: 공식 API가 일반 사용자에게 제한된 경우(예: 네이버 블로그)에는 Playwright가 유일한 실용적 방법이므로 예외 적용**.
+
+8. **CRITICAL — 프로젝트 디렉터리 규칙:** 모든 Python 파일, 설정 파일, CLAUDE.md는 반드시 프로젝트 컨텍스트에 명시된 project_path 안에 생성하라. `~/Documents/naver-blog-auto/` 등 다른 기존 디렉터리를 참조하거나 재사용하지 말 것. 각 보드는 독립된 프로젝트 디렉터리를 가진다. 에이전트 파일 역시 `{project_agents_dir}/{{name}}.md`에 저장해야 하며 글로벌 `~/.claude/agents/`에 쓰지 않는다.
+
+9. **CRITICAL — artifact 블록 필수:** 실행 가능한 스크립트를 생성하는 태스크의 에이전트는 반드시 작업 완료 후 다음 형식의 artifact 블록을 출력해야 한다. artifact 블록이 없으면 사용자가 실행할 수 없다.
+   ````artifact
+   {{"type": "script", "run_command": "python FILENAME.py", "cwd": "/absolute/project/path"}}
+   ````
 
 
 """
@@ -488,6 +524,22 @@ In the JSON "agents" array, use only the bare agent name WITHOUT the prefix (e.g
 3. **All tasks share ONE project directory.** The first task picks the directory path; every subsequent task (including integration/test tasks) uses that EXACT same path. Never create sibling directories like `*-test`, `*-v2`, `*-integration`. artifact `cwd` MUST equal the shared project directory.
 
 4. **CRITICAL — AI 호출 규칙:** 이 플랫폼에서 Anthropic Python SDK는 **설치되어 있지 않으며** 사용 시 `ModuleNotFoundError: No module named 'anthropic'`로 즉시 실패합니다. `import anthropic`, `from anthropic import ...`, `Anthropic()`, `client.messages.create(...)`, `ANTHROPIC_API_KEY` 환경변수, `requirements.txt`에 `anthropic` 추가 — 모두 절대 금지. AI 텍스트 생성은 `subprocess.run(["claude", "-p", prompt, "--output-format", "text"], capture_output=True, text=True)` 로만 처리.
+
+5. **CRITICAL — 크리덴셜/설정값 규칙:** 코드가 API 키·로그인 ID/PW·토큰·블로그 아이디·계정 정보 등 사용자 고유 값을 필요로 하면:
+   - 반드시 **첫 번째 태스크**에서 `.env.example` 파일을 프로젝트 루트에 생성하라. 형식: `KEY=설명문구`. 예: `NAVER_BLOG_ID=네이버 블로그 아이디 (예: myblog123)`. `.env.example`이 있으면 시스템이 자동으로 사용자에게 값을 입력받는 폼 카드를 만든다.
+   - **절대 금지**: 태스크 출력 텍스트에 "값을 알려주세요", "입력해주세요" 등의 문구로 크리덴셜을 요청하는 것 — 이는 비개발자 사용자가 대응할 수 없다. `.env.example`만 생성하면 시스템이 UI 폼을 자동 제공한다.
+   - 하드코딩 절대 금지. 모든 민감 값은 `os.environ.get('KEY', '')` 또는 `python-dotenv`로만 읽는다.
+
+6. **CRITICAL — 런타임 멘토 규칙:** 외부 인증(브라우저 로그인·OAuth·쿠키·세션)이 필요한 코드는 반드시 자동 로그인 패턴(`ensure_logged_in()`)을 사용하라. 실패 시 `sys.exit(1)` + 명확한 stderr 메시지 필수. 시스템이 stderr를 분석해 `runtime_guide` 카드를 자동 생성하므로 사용자가 직접 명령어를 입력할 필요가 없다.
+
+7. **CRITICAL — 공식 API 우선 규칙:** 외부 서비스(블로그·SNS·이메일·쇼핑몰 등)와 연동할 때 **반드시 공식 REST API·SDK를 먼저 사용하라.** Playwright·Selenium 등 브라우저 자동화(DOM 스크래핑)는 공식 API가 존재하지 않는 경우에만 최후 수단으로 허용. 이유: DOM 구조는 언제든 변경될 수 있어 유지보수 비용이 폭발하지만 공식 API는 안정적이다. 예: Medium → `POST https://api.medium.com/v1/users/{{id}}/posts`, Tistory → Tistory Open API, Instagram → Meta Graph API. **주의: 공식 API가 일반 사용자에게 제한된 경우(예: 네이버 블로그)에는 Playwright가 유일한 실용적 방법이므로 예외 적용**.
+
+8. **CRITICAL — 프로젝트 디렉터리 규칙:** 모든 Python 파일, 설정 파일, CLAUDE.md는 반드시 프로젝트 컨텍스트에 명시된 project_path 안에 생성하라. 다른 기존 디렉터리를 참조하거나 재사용하지 말 것. 각 보드는 독립된 프로젝트 디렉터리를 가진다.
+
+9. **CRITICAL — artifact 블록 필수:** 실행 가능한 스크립트를 생성하는 태스크의 에이전트는 반드시 작업 완료 후 다음 형식의 artifact 블록을 출력해야 한다. artifact 블록이 없으면 사용자가 실행할 수 없다.
+   ````artifact
+   {{"type": "script", "run_command": "python FILENAME.py", "cwd": "/absolute/project/path"}}
+   ````
 
 
 """
@@ -631,6 +683,189 @@ If this tool involves REPETITIVE CONTENT CREATION that needs dynamic input (blog
 - Create `topic_queue.json` in the tool_dir with content: `{{"queue": [], "history": []}}`
 - The script MUST read its topic from the queue (pop first item), NOT use hardcoded topics
 - Log each run result back to `history` in topic_queue.json
+
+## ⚠️ CRITICAL — 공식 API 우선 원칙
+외부 서비스와 연동할 때 **반드시 공식 REST API를 먼저 확인하라.** Playwright 브라우저 자동화는 공식 API가 없거나 일반 사용자에게 제한된 경우에만 허용된다.
+- Medium → `POST https://api.medium.com/v1/users/{id}/posts` (Integration Token)
+- Tistory → Tistory Open API
+- Instagram/Facebook → Meta Graph API
+- **네이버 블로그**: 공식 Blog Write API는 일반 사용자에게 제한됨 → `ensure_logged_in()` Playwright 패턴 사용
+DOM 스크래핑은 UI 변경 시 즉시 깨진다. 공식 API를 사용하면 안정적이다. 단, API가 실제로 접근 불가능한 경우에는 Playwright가 유일한 현실적 방법이다.
+
+## ⚠️ CRITICAL — Browser Login Pattern (Playwright)
+If this tool logs into ANY web platform (Naver, Tistory, Medium, Instagram, Twitter, etc.) using Playwright **AND there is no official API available**, you MUST use this exact pattern. Never use `input()`. Never fail silently. Always auto-open browser when session is missing.
+
+```python
+from pathlib import Path
+import json
+
+COOKIES_FILE = Path(__file__).parent / "{platform}_cookies.json"
+
+def save_cookies(page):
+    COOKIES_FILE.write_text(json.dumps(page.context.cookies(), ensure_ascii=False, indent=2))
+
+def load_cookies(context) -> bool:
+    if COOKIES_FILE.exists():
+        context.add_cookies(json.loads(COOKIES_FILE.read_text()))
+        return True
+    return False
+
+def ensure_logged_in(pw, login_url: str, logged_in_check) -> tuple:
+    # Returns (browser, context, page) — already logged in.
+    # If cookies are valid, uses headless. If not, opens headed browser and waits for login.
+    # logged_in_check: callable(page) -> bool
+    # 1) Try headless with saved cookies
+    browser = pw.chromium.launch(headless=True)
+    ctx = browser.new_context()
+    page = ctx.new_page()
+    if load_cookies(ctx) and logged_in_check(page):
+        return browser, ctx, page
+    browser.close()
+
+    # 2) Cookies missing or expired → open headed browser, wait for login
+    print(f"[로그인 필요] 브라우저가 열립니다. 로그인 후 자동으로 계속됩니다: {{login_url}}")
+    browser = pw.chromium.launch(headless=False)
+    ctx = browser.new_context()
+    page = ctx.new_page()
+    page.goto(login_url)
+    # Poll until we've left the login page (max 5 min)
+    for _ in range(300):
+        page.wait_for_timeout(1000)
+        if logged_in_check(page):
+            print("[로그인] 완료! 쿠키를 저장합니다.")
+            save_cookies(page)
+            return browser, ctx, page
+    raise TimeoutError("5분 내 로그인이 완료되지 않았습니다.")
+```
+
+Usage example for any platform:
+```python
+with sync_playwright() as pw:
+    browser, ctx, page = ensure_logged_in(
+        pw,
+        login_url="https://accounts.example.com/login",
+        logged_in_check=lambda p: "dashboard" in p.url or p.locator(".user-avatar").count() > 0
+    )
+    # ... do work ...
+    save_cookies(page)
+    browser.close()
+```
+
+## ⚠️ CRITICAL — OAuth 2.0 Pattern (공식 API 사용 시)
+공식 API가 OAuth 2.0을 요구하면 반드시 이 패턴을 사용하라. 사용자에게 URL 복사/붙여넣기를 요구하지 말 것. 로컬 HTTP 서버가 콜백을 자동 수신한다.
+
+```python
+import hashlib, http.server, json, os, threading, time, urllib.parse, webbrowser
+from pathlib import Path
+
+TOKEN_FILE = Path(__file__).parent / "tokens.json"
+CLIENT_ID = os.environ.get("CLIENT_ID", "")
+CLIENT_SECRET = os.environ.get("CLIENT_SECRET", "")
+REDIRECT_URI = "http://localhost:18080/callback"
+
+def _oauth_callback_server() -> tuple[str, str]:
+    received: dict = {}
+    event = threading.Event()
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a): pass
+        def do_GET(self):
+            p = urllib.parse.urlparse(self.path)
+            if p.path != "/callback":
+                self.send_response(404); self.end_headers(); return
+            qs = urllib.parse.parse_qs(p.query)
+            received["code"] = qs.get("code", [""])[0]
+            received["state"] = qs.get("state", [""])[0]
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.end_headers()
+            self.wfile.write("<html><body><h2>인증 완료! 이 창을 닫아도 됩니다.</h2></body></html>".encode())
+            event.set()
+    srv = http.server.HTTPServer(("localhost", 18080), Handler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    event.wait(timeout=300)
+    srv.shutdown()
+    return received.get("code", ""), received.get("state", "")
+
+def ensure_access_token(auth_url: str, token_url: str) -> str:
+    import httpx
+    tokens = json.loads(TOKEN_FILE.read_text()) if TOKEN_FILE.exists() else {}
+    if tokens.get("refresh_token"):
+        try:
+            r = httpx.post(token_url, params={"grant_type": "refresh_token", "client_id": CLIENT_ID, "client_secret": CLIENT_SECRET, "refresh_token": tokens["refresh_token"]}, timeout=10)
+            r.raise_for_status()
+            data = r.json()
+            if data.get("access_token"):
+                tokens.update(data); TOKEN_FILE.write_text(json.dumps(tokens))
+                return tokens["access_token"]
+        except Exception: pass
+    state = hashlib.sha256(os.urandom(16)).hexdigest()[:16]
+    url = f"{auth_url}?response_type=code&client_id={CLIENT_ID}&redirect_uri={urllib.parse.quote(REDIRECT_URI)}&state={state}"
+    print("[로그인] 브라우저에서 인증해 주세요.")
+    webbrowser.open(url)
+    code, returned_state = _oauth_callback_server()
+    if not code: raise TimeoutError("5분 내 인증이 완료되지 않았습니다.")
+    r = httpx.post(token_url, params={"grant_type": "authorization_code", "client_id": CLIENT_ID, "client_secret": CLIENT_SECRET, "code": code, "redirect_uri": REDIRECT_URI}, timeout=10)
+    r.raise_for_status()
+    tokens = r.json(); TOKEN_FILE.write_text(json.dumps(tokens))
+    return tokens["access_token"]
+```
+
+.env.example에는 `CLIENT_ID`, `CLIENT_SECRET` 추가. Redirect URI는 반드시 `http://localhost:18080/callback`으로 서비스에 등록하도록 안내.
+
+## ⚠️ CRITICAL — 네이버 블로그 Playwright 셀렉터 (검증 완료 2026-04-28)
+네이버 스마트 에디터 3(SE3) Playwright 자동화 시 반드시 아래 셀렉터를 사용하라. DOM 구조가 독특하므로 임의 추측 금지.
+
+```python
+# 1) 에디터 로딩 후 7초 대기 필수 (에디터 초기화 시간)
+page.goto(write_url, wait_until="domcontentloaded", timeout=40000)
+page.wait_for_timeout(7000)
+
+# 2) 도움말 모달 닫기 (매번 등장)
+try:
+    page.locator("button.se-help-panel-close-button").first.click()
+    page.wait_for_timeout(500)
+except Exception:
+    pass
+page.keyboard.press("Escape")
+
+# 3) 제목 입력 — .se-section-documentTitle 클릭 후 타이핑
+#    이유: 에디터는 input_buffer iframe을 통해 키보드 이벤트를 캡처함
+#    contenteditable[true]는 left:-9999px 숨김 div이라 직접 포커스 불가
+page.locator(".se-section-documentTitle").first.click()
+page.wait_for_timeout(500)
+page.keyboard.type(title)
+
+# 4) 본문 입력 — JS로 innerHTML 직접 주입
+js_content = json.dumps(html_content)
+page.evaluate(
+    "(function() {"
+    "  const area = document.querySelector('.se-content') || document.querySelector('.se-main-container');"
+    "  if (area) { area.innerHTML = " + js_content + "; area.dispatchEvent(new InputEvent('input', {bubbles: true})); }"
+    "})()"
+)
+
+# 5) 발행 버튼 (설정 패널 열기)
+page.locator("button[class*='publish_btn']").first.click()
+page.wait_for_timeout(2000)
+
+# 6) 최종 발행 확인 버튼
+page.locator("button.confirm_btn__WEaBq").wait_for(state="visible", timeout=5000)
+page.locator("button.confirm_btn__WEaBq").click()
+page.wait_for_timeout(5000)
+
+# 7) 발행된 포스트 URL 획득 — PostDelete 링크의 logNo 활용
+#    (발행 전 logNo 목록과 비교해 새로운 것 추출)
+main_frame = next((f for f in page.frames if f.name == "mainFrame"), None)
+target = main_frame if main_frame else page
+log_nos = target.evaluate(
+    "(function() {"
+    "  return Array.from(document.querySelectorAll('a[href*=\"PostDelete\"]'))"
+    "    .map(a => { const m = a.href.match(/logNo=(\\\\d+)/); return m ? m[1] : null; })"
+    "    .filter(Boolean);"
+    "})()"
+)
+latest_url = ("https://blog.naver.com/" + BLOG_ID + "/" + max(log_nos, key=int)) if log_nos else None
+```
 
 ## Output format
 Write the Python file, then .env.example, then requirements.txt entries.
@@ -1018,6 +1253,17 @@ async def run_card(
     system = "\n\n---\n\n".join(system_parts) if system_parts else \
         f"You are {agent_name}. Complete the assigned task."
     system += _build_port_rule()
+    if project_path:
+        system += f"""
+
+## ⚠️ CRITICAL — 실행 가능한 스크립트 생성 규칙
+이 태스크가 실행 가능한 Python 스크립트를 생성하는 경우, 반드시 스크립트 파일을 `{project_path}/` 안에 작성한 뒤 마지막에 다음 artifact 블록을 출력하라. 이 블록이 없으면 사용자가 UI에서 실행할 수 없다.
+
+```artifact
+{{"type": "script", "run_command": "python FILENAME.py", "cwd": "{project_path}"}}
+```
+
+다른 기존 디렉터리(~/Documents/naver-blog-auto/ 등)를 참조하지 말 것. 모든 파일은 `{project_path}/` 안에 생성한다."""
     if design_system:
         system = _inject_design(design_system, system)
 
@@ -1123,3 +1369,153 @@ async def generate_auto_answers(
     chunks: list[str] = []
     await _run_claude(prompt=prompt, system_prompt=system, on_chunk=lambda c: chunks.append(c))
     return "".join(chunks).strip()
+
+
+_DIAGNOSE_SYSTEM = """당신은 비개발자 사용자의 멘토입니다.
+카드 실행이 실패했을 때 stderr/exit_code/프로젝트 파일 목록을 보고 원인을 진단합니다.
+다음 JSON으로만 응답하세요. 코드·주석·마크다운·설명 일체 금지.
+
+{
+  "kind": "login_required|cred_missing|session_expired|dep_missing|port_conflict|unknown",
+  "message": "비개발자용 한 줄 안내 (한국어)",
+  "detection": {
+    "type": "cookie_file|url_probe|http_probe|file_watch|manual",
+    "target": "<절대경로 또는 절대URL>",
+    "interval_sec": 3,
+    "timeout_sec": 600
+  },
+  "remediation_steps": ["1단계", "2단계"],
+  "auto_retry_parent": true
+}
+
+분류 기준:
+- 쿠키 파일 없음·세션 만료 → login_required, detection.type=cookie_file, target=예상 쿠키 경로
+- .env 없음·API 키 누락·401·403 → cred_missing, detection.type=file_watch, target=.env 절대경로
+- 모듈 ImportError·패키지 없음 → dep_missing, detection.type=manual
+- 포트 충돌·EADDRINUSE → port_conflict, detection.type=manual
+- 분류 불가 → unknown, detection.type=manual
+
+절대 금지: 플랫폼 이름(naver, medium, instagram, tistory) 하드코딩. target은 LLM이 파일 목록에서 유추.
+"""
+
+
+async def diagnose_failure(
+    card_title: str,
+    stderr_tail: str,
+    exit_code: int,
+    project_path: str,
+    board_context: str = "",
+) -> "dict | None":
+    """실패한 카드의 stderr를 LLM이 분석해 runtime_guide 페이로드 반환. 실패 시 None."""
+    import os as _os
+    files_listing = ""
+    env_example = ""
+    if project_path and Path(project_path).exists():
+        try:
+            files_listing = "\n".join(
+                str(p.relative_to(project_path))
+                for p in Path(project_path).rglob("*")
+                if not any(part.startswith(".") for part in p.parts) and p.is_file()
+            )[:2000]
+        except Exception:
+            files_listing = ""
+        env_ex = Path(project_path) / ".env.example"
+        if env_ex.exists():
+            try:
+                env_example = env_ex.read_text()[:500]
+            except Exception:
+                pass
+
+    prompt = (
+        f"## 카드 제목\n{card_title}\n\n"
+        f"## exit_code\n{exit_code}\n\n"
+        f"## stderr (마지막 2KB)\n{stderr_tail[-2000:]}\n\n"
+        f"## 프로젝트 파일 목록\n{files_listing}\n\n"
+        f"## .env.example\n{env_example}\n\n"
+        f"## 보드 컨텍스트\n{board_context}"
+    )
+    chunks: list[str] = []
+    try:
+        await _run_claude(prompt=prompt, system_prompt=_DIAGNOSE_SYSTEM, on_chunk=lambda c: chunks.append(c))
+        raw = "".join(chunks).strip()
+        if "```json" in raw:
+            raw = raw.split("```json")[1].split("```")[0].strip()
+        elif "```" in raw:
+            raw = raw.split("```")[1].split("```")[0].strip()
+        result = json.loads(raw)
+        if "kind" not in result or "detection" not in result:
+            return None
+        return result
+    except Exception:
+        return None
+
+
+async def audit_runtime_prereqs(
+    project_path: str,
+    board_context: str = "",
+) -> "dict | None":
+    """보드 첫 진입 시 프로젝트 디렉터리를 스캔해 누락된 설정을 진단. 없으면 None."""
+    import glob as _glob
+    if not project_path or not Path(project_path).exists():
+        return None
+
+    # 누락 패턴 스캔
+    env_example = Path(project_path) / ".env.example"
+    env_file = Path(project_path) / ".env"
+    cookie_files = list(Path(project_path).glob("*_cookies.json")) + list(Path(project_path).glob("*.pickle"))
+
+    issues = []
+    env_example_text = ""
+    if env_example.exists():
+        env_example_text = env_example.read_text()[:500]
+        # .env.example에서 필요한 키 목록 파싱
+        example_keys = {
+            line.split("=")[0].strip()
+            for line in env_example_text.splitlines()
+            if "=" in line and not line.startswith("#") and line.strip()
+        }
+        if not env_file.exists():
+            issues.append(f".env.example 있으나 .env 없음 (필요 키: {', '.join(sorted(example_keys))})")
+        else:
+            env_content = env_file.read_text()
+            env_lines = [l for l in env_content.splitlines() if "=" in l and not l.startswith("#")]
+            env_keys = {l.split("=")[0].strip() for l in env_lines}
+            env_values = {l.split("=")[0].strip(): l.split("=", 1)[1].strip() for l in env_lines}
+
+            # placeholder 값 감지
+            placeholder_keys = [
+                k for k, v in env_values.items()
+                if "여기에" in v or "placeholder" in v.lower() or v == ""
+            ]
+            if placeholder_keys:
+                issues.append(f".env에 미입력 항목: {', '.join(placeholder_keys)}")
+
+            # .env.example에 있지만 .env에 없는 키 감지
+            missing_keys = example_keys - env_keys
+            if missing_keys:
+                issues.append(f".env에 누락된 키: {', '.join(sorted(missing_keys))}")
+
+    if not issues:
+        return None
+
+    prompt = (
+        f"## 프로젝트 경로\n{project_path}\n\n"
+        f"## 발견된 문제\n" + "\n".join(f"- {i}" for i in issues) + "\n\n"
+        f"## .env.example\n{env_example_text}\n\n"
+        f"## 보드 컨텍스트\n{board_context}"
+    )
+    chunks: list[str] = []
+    try:
+        await _run_claude(prompt=prompt, system_prompt=_DIAGNOSE_SYSTEM, on_chunk=lambda c: chunks.append(c))
+        raw = "".join(chunks).strip()
+        if "```json" in raw:
+            raw = raw.split("```json")[1].split("```")[0].strip()
+        elif "```" in raw:
+            raw = raw.split("```")[1].split("```")[0].strip()
+        result = json.loads(raw)
+        if "kind" not in result or "detection" not in result:
+            return None
+        result["auto_retry_parent"] = False
+        return result
+    except Exception:
+        return None

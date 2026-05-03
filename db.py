@@ -337,9 +337,24 @@ def get_cards(board_id: int):
 def get_cards_for_run(run_id: int):
     with sqlite3.connect(DB_PATH) as conn:
         conn.row_factory = sqlite3.Row
-        return [dict(r) for r in conn.execute(
+        rows = [dict(r) for r in conn.execute(
             "SELECT * FROM cards WHERE run_id=? ORDER BY id", (run_id,)
         )]
+        # 카드별 미답변 agent_reply 수 집계
+        pending = {r["card_id"]: r["cnt"] for r in conn.execute(
+            """
+            SELECT f.card_id, COUNT(*) as cnt
+            FROM feedback f
+            WHERE f.type = 'agent_reply'
+              AND NOT EXISTS (
+                SELECT 1 FROM feedback c WHERE c.parent_id = f.id
+              )
+            GROUP BY f.card_id
+            """
+        )}
+        for row in rows:
+            row["pending_replies"] = pending.get(row["id"], 0)
+        return rows
 
 
 def update_card_status(card_id: int, status: str):
@@ -523,6 +538,27 @@ def create_env_input_card(board_id: int, env_vars: list) -> int:
         cur = c.execute(
             "INSERT INTO cards (board_id, run_id, title, status, card_kind, output) VALUES (?,?,?,?,?,?)",
             (board_id, run_id, "환경 변수 설정이 필요합니다", "awaiting_user", "env_input", json.dumps(env_vars, ensure_ascii=False))
+        )
+        return cur.lastrowid
+
+
+def create_runtime_guide_card(board_id: int, payload: dict, parent_card_id: int = None) -> int:
+    """실패 진단 결과로 spawn된 런타임 가이드 카드 생성."""
+    import json as _json
+    from datetime import datetime
+    payload = dict(payload)
+    payload["parent_card_id"] = parent_card_id
+    payload["created_at"] = datetime.utcnow().isoformat()
+    run_id = get_latest_run_id(board_id)
+    if not run_id:
+        run_id = create_run(board_id, trigger="manual")
+    with sqlite3.connect(DB_PATH) as c:
+        cur = c.execute(
+            "INSERT INTO cards (board_id, run_id, title, status, card_kind, output) VALUES (?,?,?,?,?,?)",
+            (board_id, run_id,
+             payload.get("message", "설정이 필요합니다"),
+             "awaiting_user", "runtime_guide",
+             _json.dumps(payload, ensure_ascii=False))
         )
         return cur.lastrowid
 

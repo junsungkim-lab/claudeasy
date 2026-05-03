@@ -96,7 +96,7 @@ export interface Card {
   artifact_port: number | null;
   artifact_cwd: string | null;
   design_system: string | null;
-  card_kind?: "task" | "clarification" | "env_input";
+  card_kind?: "task" | "clarification" | "env_input" | "runtime_guide";
 }
 
 export interface Agent {

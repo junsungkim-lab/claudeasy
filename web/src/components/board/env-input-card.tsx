@@ -81,7 +81,7 @@ export function EnvInputCard({
         className="w-full"
       >
         <Save size={12} />
-        {isPending ? "저장 중..." : "저장하고 스모크 테스트"}
+        {isPending ? "저장 중..." : "저장하고 계속"}
       </Button>
     </div>
   );

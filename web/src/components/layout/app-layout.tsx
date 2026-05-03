@@ -17,7 +17,7 @@ export function AppLayout() {
       <div className="flex flex-1 overflow-hidden">
         <div
           className={cn(
-            "transition-all duration-200 overflow-hidden",
+            "transition-all duration-200 overflow-hidden h-full",
             sidebarCollapsed ? "w-0" : "w-56"
           )}
         >
@@ -27,7 +27,7 @@ export function AppLayout() {
           <div className="w-full max-w-lg space-y-4">
             <div className="text-center">
               <h2 className="text-base font-semibold text-gray-900 mb-1">
-                새 자동화 만들기
+                새 작업 만들기
               </h2>
               <p className="text-xs text-gray-500">
                 좌측에서 보드를 선택하거나 아래에서 새 작업을 만드세요

@@ -34,7 +34,7 @@ import notifier
 import session_logger
 import github_trending as gh_trending
 import github_oauth
-from harness import generate_harness, run_card, agents_exist_on_disk, _run_claude, update_project_memory, has_unanswered_questions, generate_auto_answers, parse_artifact, _sanitize_sdk_usage
+from harness import generate_harness, run_card, agents_exist_on_disk, _run_claude, update_project_memory, has_unanswered_questions, generate_auto_answers, parse_artifact, _sanitize_sdk_usage, diagnose_failure as harness_diagnose_failure, audit_runtime_prereqs as harness_audit_runtime_prereqs
 
 # ── 실시간 구독자 관리 ───────────────────────────────────────────────────────
 _board_subs: dict[int, set] = {}        # board_id → set[WebSocket]
@@ -52,6 +52,9 @@ _approval_responses: dict[int, dict] = {}           # card_id → {action, messa
 
 # ── 자동 답변 오케스트레이터 ─────────────────────────────────────────────────
 _auto_answer_counts: dict[int, int] = {}  # card_id → 자동 답변 횟수 (루프 방지)
+_diagnose_counts: dict[int, int] = {}    # card_id → LLM 진단 횟수 (루프 방지)
+_audit_done: set[int] = set()            # board_id → audit 완료 여부
+_runtime_watchers: dict[int, asyncio.Task] = {}  # guide_card_id → detection watcher task
 
 # ── 산출물 프로세스 레지스트리 ────────────────────────────────────────────────
 _artifact_procs: dict[int, asyncio.subprocess.Process] = {}  # card_id → Process
@@ -874,36 +877,52 @@ async def submit_clarification(board_id: int, body: dict):
 
 @app.post("/api/boards/{board_id}/env")
 async def save_board_env(board_id: int, body: dict):
-    """automation 환경 변수 저장 후 스모크 테스트"""
+    """환경 변수 저장 — automation/build 보드 공통 처리."""
     board = db.get_board(board_id)
     if not board:
         return {"error": "보드를 찾을 수 없습니다"}
 
-    tool_dir = board.get("automation_tool_dir")
+    task_kind = board.get("task_kind", "build")
+
+    # 저장 경로 결정
+    tool_dir = board.get("automation_tool_dir") or board.get("project_path", "")
     if not tool_dir:
-        return {"error": "automation_tool_dir not set"}
+        return {"error": "project_path not set"}
 
     env_path = Path(tool_dir) / ".env"
-    lines = [f"{k}={v}" for k, v in body.items() if k and v]
-    env_path.write_text("\n".join(lines) + "\n")
+
+    # 기존 .env 읽기 (머지)
+    existing: dict[str, str] = {}
+    if env_path.exists():
+        for line in env_path.read_text().splitlines():
+            if "=" in line and not line.startswith("#"):
+                k, _, v = line.partition("=")
+                existing[k.strip()] = v.strip()
+    existing.update({k: v for k, v in body.items() if k and v})
+
+    env_path.parent.mkdir(parents=True, exist_ok=True)
+    env_path.write_text("\n".join(f"{k}={v}" for k, v in existing.items()) + "\n")
     env_path.chmod(0o600)
 
     # env_input 카드 완료 처리
-    import sqlite3
-    with sqlite3.connect(db.DB_PATH) as c:
+    import sqlite3 as _sqlite3
+    with _sqlite3.connect(db.DB_PATH) as c:
         c.execute("UPDATE cards SET status='done' WHERE board_id=? AND card_kind='env_input'", (board_id,))
+    db.update_board_status(board_id, "done")
 
-    # automation spec 확인
-    board = db.get_board(board_id)
-    if not board.get("automation_agent_prompt"):
-        return {"error": "automation spec not set"}
+    run_id = db.get_latest_run_id(board_id)
+    if run_id:
+        await _board_emit(board_id, {"type": "board_done", "run_id": run_id})
 
-    automation = {
-        "agent_prompt": board["automation_agent_prompt"],
-        "allowed_tools": json.loads(board.get("automation_allowed_tools") or '["Bash","Read","Write"]'),
-        "schedule": board.get("cron_expr"),
-    }
-    asyncio.create_task(_run_automation_smoke(board_id, automation, tool_dir))
+    # automation 보드: 스모크 테스트도 실행
+    if task_kind == "automation" and board.get("automation_agent_prompt"):
+        automation = {
+            "agent_prompt": board["automation_agent_prompt"],
+            "allowed_tools": json.loads(board.get("automation_allowed_tools") or '["Bash","Read","Write"]'),
+            "schedule": board.get("cron_expr"),
+        }
+        asyncio.create_task(_run_automation_smoke(board_id, automation, tool_dir))
+
     return {"status": "ok"}
 
 
@@ -989,7 +1008,24 @@ async def delete_topic_queue_item(board_id: int, index: int):
 async def get_runs(board_id: int):
     runs = db.get_runs(board_id)
     for r in runs:
-        r["cards"] = db.get_cards_for_run(r["id"])
+        cards = db.get_cards_for_run(r["id"])
+        # 프로세스가 죽었는데 UI가 "실행 중"으로 굳은 카드 자동 수정
+        for card in cards:
+            card_id = card["id"]
+            if card.get("run_command") and card.get("status") == "in_progress":
+                proc = _artifact_procs.get(card_id)
+                if proc is None or proc.returncode is not None:
+                    # 프로세스 없거나 이미 종료됨 → error 상태로 정정
+                    rc = proc.returncode if proc else -1
+                    db.update_card_status(card_id, "error")
+                    db.append_card_output(card_id, f"\n\n---\n**[자동 복구]** 프로세스가 종료됐습니다 (rc={rc}). 재실행이 필요합니다.")
+                    card["status"] = "error"
+                    _artifact_procs.pop(card_id, None)
+        r["cards"] = cards
+    # 보드 첫 진입 시 1회 프리플라이트 audit (백그라운드, 블로킹 없음)
+    if board_id not in _audit_done:
+        _audit_done.add(board_id)
+        asyncio.create_task(_maybe_audit_board(board_id))
     return runs
 
 
@@ -1551,32 +1587,83 @@ def _script_missing(cmd: str, cwd: "str | None") -> "str | None":
     return None
 
 
-async def _watch_early_exit(card_id: int, proc: asyncio.subprocess.Process) -> None:
-    """5초 내 비정상 종료 시 stderr tail을 WS + 카드 output에 기록."""
+async def _watch_early_exit(card_id: int, proc: asyncio.subprocess.Process,
+                           capture_stdout: bool = False) -> None:
+    """스크립트 완료 대기 / 서버형 초기 5초 생존 확인."""
+    timeout = None if capture_stdout else 5
     try:
-        await asyncio.wait_for(proc.wait(), timeout=5)
+        await asyncio.wait_for(proc.wait(), timeout=timeout)
     except asyncio.TimeoutError:
-        return  # 5초 생존 = 정상 기동
-    if proc.returncode == 0:
-        _artifact_procs.pop(card_id, None)
-        _artifact_watchers.pop(card_id, None)
+        # 서버형: 5초 생존 → 정상 기동. 백그라운드에서 계속 감시
+        asyncio.create_task(_watch_server_exit(card_id, proc))
         return
-    tail = b""
-    if proc.stderr:
+
+    await _handle_proc_exit(card_id, proc, emit_stdout=True)
+
+
+async def _handle_proc_exit(card_id: int, proc: asyncio.subprocess.Process,
+                            emit_stdout: bool = False) -> None:
+    """프로세스 종료 후 stdout/stderr 수집 + WS 이벤트 발행."""
+    stdout_str = ""
+    if proc.stdout:
         try:
-            tail = await asyncio.wait_for(proc.stderr.read(4096), timeout=1)
+            stdout_bytes = await asyncio.wait_for(proc.stdout.read(8192), timeout=3)
+            stdout_str = stdout_bytes.decode("utf-8", "replace").strip()
         except Exception:
             pass
-    tail_str = tail.decode("utf-8", "replace").strip()[-2000:]
-    marker = f"\n\n---\n**[실행 실패 rc={proc.returncode}]**\n```\n{tail_str}\n```"
-    db.append_card_output(card_id, marker)
-    await _card_emit(card_id, {
-        "type": "artifact_failed",
-        "rc": proc.returncode,
-        "stderr_tail": tail_str,
-    })
+
+    stderr_str = ""
+    if proc.stderr:
+        try:
+            stderr_bytes = await asyncio.wait_for(proc.stderr.read(4096), timeout=2)
+            stderr_str = stderr_bytes.decode("utf-8", "replace").strip()[-2000:]
+        except Exception:
+            pass
+
+    rc = proc.returncode
     _artifact_procs.pop(card_id, None)
     _artifact_watchers.pop(card_id, None)
+
+    if rc == 0:
+        if emit_stdout and stdout_str:
+            await _card_emit(card_id, {"type": "artifact_completed", "rc": 0, "stdout": stdout_str})
+        await _card_emit(card_id, {"type": "artifact_stopped"})
+        return
+
+    log = (stdout_str + "\n" + stderr_str).strip() or f"종료 코드 {rc}"
+    marker = f"\n\n---\n**[실행 실패 rc={rc}]**\n```\n{log[-2000:]}\n```"
+    db.append_card_output(card_id, marker)
+    await _card_emit(card_id, {"type": "artifact_failed", "rc": rc, "stderr_tail": log[-2000:]})
+    asyncio.create_task(_try_diagnose_and_guide(card_id, log[-2000:], rc))
+
+
+async def _watch_server_exit(card_id: int, proc: asyncio.subprocess.Process) -> None:
+    """서버형 프로세스가 5초 이후 예기치 않게 종료되면 artifact_exited 발행."""
+    try:
+        await proc.wait()
+    except Exception:
+        return
+
+    rc = proc.returncode
+    stderr_str = ""
+    if proc.stderr:
+        try:
+            stderr_bytes = await asyncio.wait_for(proc.stderr.read(4096), timeout=2)
+            stderr_str = stderr_bytes.decode("utf-8", "replace").strip()[-2000:]
+        except Exception:
+            pass
+
+    _artifact_procs.pop(card_id, None)
+    _artifact_watchers.pop(card_id, None)
+
+    if rc == 0:
+        await _card_emit(card_id, {"type": "artifact_exited", "rc": 0})
+    else:
+        log = stderr_str or f"종료 코드 {rc}"
+        marker = f"\n\n---\n**[서버 종료 rc={rc}]**\n```\n{log[-2000:]}\n```"
+        db.append_card_output(card_id, marker)
+        await _card_emit(card_id, {"type": "artifact_exited", "rc": rc, "stderr_tail": log[-2000:]})
+        asyncio.create_task(_try_diagnose_and_guide(card_id, log[-2000:], rc))
 
 
 async def _persist_card_artifact(
@@ -1629,8 +1716,137 @@ async def _persist_card_artifact(
     return artifact
 
 
+@app.patch("/api/cards/{card_id}/run-command")
+async def patch_run_command(card_id: int, body: dict):
+    card = db.get_card(card_id)
+    if not card:
+        raise HTTPException(404, "카드 없음")
+    new_cmd = (body.get("run_command") or "").strip()
+    if not new_cmd:
+        raise HTTPException(400, "run_command 비어있음")
+    db.update_card_artifact(card_id, card.get("artifact_type") or "script", new_cmd,
+                            card.get("artifact_port"), card.get("artifact_cwd"))
+    return {"ok": True, "run_command": new_cmd}
+
+
+@app.post("/api/cards/{card_id}/auto-fix")
+async def auto_fix_artifact(card_id: int):
+    """실행 오류 자동 수정: run_command를 분석해 올바른 명령어로 교체 후 실행."""
+    import shlex
+    card = db.get_card(card_id)
+    if not card:
+        raise HTTPException(404, "카드 없음")
+
+    board = db.get_board(card.get("board_id")) if card.get("board_id") else None
+    cwd = card.get("artifact_cwd") or (board.get("project_path") if board else None)
+    if not cwd or not Path(cwd).exists():
+        return {"error": f"프로젝트 디렉터리 없음: {cwd}"}
+
+    cmd_raw = card.get("run_command", "").strip()
+    original_cmd = cmd_raw
+    fixed = False
+    fix_reason = ""
+
+    try:
+        tokens = shlex.split(cmd_raw) if cmd_raw else []
+    except Exception:
+        tokens = []
+
+    _RUNNER_CANDIDATES = [
+        "run_daily.py", "run.py", "runner.py", "daily.py",
+        "run_daily.sh", "run.sh", "runner.sh",
+    ]
+
+    # 1) trailing dangling flag → runner 탐색
+    if tokens and tokens[-1].startswith("--") and "=" not in tokens[-1]:
+        for candidate in _RUNNER_CANDIDATES:
+            if (Path(cwd) / candidate).exists():
+                interp = "python3" if candidate.endswith(".py") else "bash"
+                cmd_raw = f"{interp} {candidate}"
+                fixed = True
+                fix_reason = f"불완전한 플래그 제거 → {candidate} 사용"
+                break
+        if not fixed:
+            tokens = tokens[:-1]
+            cmd_raw = shlex.join(tokens)
+            fixed = True
+            fix_reason = "불완전한 플래그 제거"
+
+    # 2) 스크립트 파일 없음 → runner 탐색
+    if not fixed and tokens:
+        script_token = next((t for t in tokens if t.endswith(".py") or t.endswith(".sh")), None)
+        if script_token and not Path(cwd, script_token).exists():
+            for candidate in _RUNNER_CANDIDATES:
+                if (Path(cwd) / candidate).exists():
+                    interp = "python3" if candidate.endswith(".py") else "bash"
+                    cmd_raw = f"{interp} {candidate}"
+                    fixed = True
+                    fix_reason = f"스크립트 없음 → {candidate} 사용"
+                    break
+            if not fixed:
+                # cwd에 있는 .py 스크립트 중 main/run 패턴으로 fallback
+                py_scripts = sorted(Path(cwd).glob("*.py"))
+                best = next((s for s in py_scripts if any(kw in s.name for kw in ("run", "main", "daily", "start"))), None)
+                if best:
+                    cmd_raw = f"python3 {best.name}"
+                    fixed = True
+                    fix_reason = f"대체 스크립트: {best.name}"
+
+    if not fixed:
+        return {"error": "자동 수정 불가 — 명령어를 직접 수정해주세요", "original": original_cmd}
+
+    # 새 명령어에 서버 실행 패턴이 있으면 server 타입 보존, 아니면 script
+    _SERVER_PATTERNS = ("uvicorn", "gunicorn", "flask run", "hypercorn", "daphne",
+                        "waitress", "node ", "npm start", "http.server", "fastapi run")
+    is_server_cmd = any(p in cmd_raw for p in _SERVER_PATTERNS)
+    original_type = card.get("artifact_type") or "script"
+    fixed_type = "server" if is_server_cmd else "script"
+    fixed_port = card.get("artifact_port") if fixed_type == "server" else None
+    db.update_card_artifact(card_id, fixed_type, cmd_raw, fixed_port, cwd)
+    logger.info("[auto-fix] card=%s type=%s→%s %s → %s (%s)", card_id, original_type, fixed_type, original_cmd, cmd_raw, fix_reason)
+
+    # 수정 후 즉시 실행
+    run_result = await _run_artifact_inner(card_id)
+    return {"ok": True, "fixed_cmd": cmd_raw, "fix_reason": fix_reason, "run": run_result}
+
+
+@app.post("/api/cards/{card_id}/guide-resolve")
+async def guide_resolve(card_id: int):
+    """manual detection 타입의 runtime_guide 카드를 사용자가 직접 완료 처리."""
+    card = db.get_card(card_id)
+    if not card or card.get("card_kind") != "runtime_guide":
+        raise HTTPException(404, "가이드 카드 없음")
+
+    # watcher cancel (있으면)
+    watcher = _runtime_watchers.pop(card_id, None)
+    if watcher:
+        watcher.cancel()
+
+    db.update_card_status(card_id, "done")
+    board_id = card["board_id"]
+    await _board_emit(board_id, {"type": "card_update", "card_id": card_id, "status": "done"})
+
+    import json as _json
+    try:
+        payload = _json.loads(card.get("output") or "{}")
+        parent_card_id = payload.get("parent_card_id")
+        if payload.get("auto_retry_parent") and parent_card_id:
+            await _run_artifact_inner(parent_card_id)
+    except Exception:
+        pass
+    return {"ok": True}
+
+
 @app.post("/api/cards/{card_id}/run")
 async def run_artifact(card_id: int):
+    try:
+        return await _run_artifact_inner(card_id)
+    except Exception as e:
+        logger.exception("[run_artifact] 예외: card_id=%s", card_id)
+        return {"error": f"서버 오류: {e}"}
+
+
+async def _run_artifact_inner(card_id: int):
     card = db.get_card(card_id)
     if not card or not card.get("run_command"):
         return {"error": "실행 가능한 산출물이 없습니다"}
@@ -1669,10 +1885,10 @@ async def run_artifact(card_id: int):
 
     if actual_port != preferred_port:
         db.update_card_artifact(card_id, card.get("artifact_type"), cmd, actual_port, cwd)
+        await _card_emit(card_id, {"type": "port_remapped", "from": preferred_port, "to": actual_port})
         logger.info("[run_artifact] 포트 충돌 → %d → %d 사용", preferred_port, actual_port)
 
-    import copy
-    proc_env = copy.copy(os.environ)
+    proc_env = dict(os.environ)
     env_file = Path(cwd) / ".env"
     if env_file.exists():
         for line in env_file.read_text().splitlines():
@@ -1681,15 +1897,16 @@ async def run_artifact(card_id: int):
                 if k.strip() and v.strip():
                     proc_env[k.strip()] = v.strip()
 
+    is_script = (card.get("artifact_type") == "script")
     new_proc = await asyncio.create_subprocess_shell(
         cmd, cwd=cwd,
         env=proc_env,
-        stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.PIPE,  # early-exit watcher가 읽음
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
     )
     _artifact_procs[card_id] = new_proc
     _artifact_watchers[card_id] = asyncio.create_task(
-        _watch_early_exit(card_id, new_proc)
+        _watch_early_exit(card_id, new_proc, capture_stdout=is_script)
     )
     await _card_emit(card_id, {"type": "artifact_started", "pid": new_proc.pid, "port": actual_port})
     return {"pid": new_proc.pid, "port": actual_port}
@@ -2244,6 +2461,12 @@ async def _run_pipeline(board_id: int, run_id: int, user_request: str,
 
         await _run_cards_with_deps(card_ids, tasks, _run_single_card)
 
+        # ── .env.example 감지 → env_input 카드 자동 생성 (build 보드용) ─────
+        env_spawned = await _check_and_spawn_env_input(board_id, project_path, run_id)
+        if env_spawned:
+            # env 입력 대기 상태 — board는 done이 아닌 awaiting_user
+            return
+
         db.update_run_status(run_id, "done")
         db.update_board_status(board_id, "done")
         await _run_emit(run_id, {"type": "run_done"})
@@ -2264,6 +2487,7 @@ async def _run_pipeline(board_id: int, run_id: int, user_request: str,
             pass  # 저장 실패해도 파이프라인에 영향 없음
 
     except Exception as e:
+        logger.error("[_run_pipeline] board_%d 파이프라인 실패: %s", board_id, e, exc_info=True)
         db.update_run_status(run_id, "error")
         db.update_board_status(board_id, "error")
         await _run_emit(run_id, {"type": "error", "text": str(e)})
@@ -2399,6 +2623,252 @@ def _is_sensitive_question(text: str) -> bool:
     return bool(_SENSITIVE_QUESTION_RE.search(text))
 
 
+async def _check_and_spawn_env_input(board_id: int, project_path: str, run_id: int) -> bool:
+    """모든 카드 완료 후 .env.example 체크 → 미입력 키가 있으면 env_input 카드 자동 생성 (build 보드 전용).
+    env_input 카드를 생성했으면 True, 불필요하면 False 반환."""
+    if not project_path:
+        return False
+    env_example = Path(project_path) / ".env.example"
+    if not env_example.exists():
+        return False
+
+    # 이미 이 run에 env_input 카드가 있으면 skip
+    cards = db.get_cards_for_run(run_id)
+    if any(c.get("card_kind") == "env_input" for c in cards):
+        return False
+
+    # .env.example 파싱
+    env_vars = []
+    for line in env_example.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, desc = line.partition("=")
+        key = key.strip()
+        if key:
+            env_vars.append({"key": key, "description": desc.strip()})
+
+    if not env_vars:
+        return False
+
+    # .env에서 이미 채워진 키 확인
+    env_path = Path(project_path) / ".env"
+    filled_keys: set[str] = set()
+    if env_path.exists():
+        for line in env_path.read_text().splitlines():
+            if "=" in line and not line.startswith("#"):
+                k, _, v = line.partition("=")
+                k, v = k.strip(), v.strip()
+                # 빈 값·플레이스홀더는 미입력으로 간주
+                if v and not any(ph in v.lower() for ph in ["여기에", "your_", "example", "placeholder", "<", ">"]):
+                    filled_keys.add(k)
+
+    missing = [ev for ev in env_vars if ev["key"] not in filled_keys]
+    if not missing:
+        return False
+
+    env_card_id = db.create_env_input_card(board_id, missing)
+    db.update_board_status(board_id, "awaiting_user")
+    await _board_emit(board_id, {
+        "type": "card_update",
+        "card_id": env_card_id,
+        "status": "awaiting_user",
+        "card_kind": "env_input",
+    })
+    await _board_emit(board_id, {"type": "status", "status": "awaiting_user"})
+    return True
+
+
+async def _maybe_audit_board(board_id: int) -> None:
+    """보드 첫 진입 시 프로젝트 디렉터리를 스캔해 누락 설정이 있으면 runtime_guide 카드 삽입 (idempotent)."""
+    board = db.get_board(board_id)
+    if not board:
+        return
+    project_path = board.get("project_path") or ""
+    if not project_path or not Path(project_path).exists():
+        return
+
+    # 이미 runtime_guide 카드가 있으면 skip (이중 삽입 방지)
+    run_id = db.get_latest_run_id(board_id)
+    if run_id:
+        cards = db.get_run_cards(run_id)
+        if any(c.get("card_kind") == "runtime_guide" for c in cards):
+            return
+
+    payload = await harness_audit_runtime_prereqs(
+        project_path=project_path,
+        board_context=board.get("description", ""),
+    )
+    if not payload:
+        return
+
+    guide_card_id = db.create_runtime_guide_card(board_id, payload, parent_card_id=None)
+    await _board_emit(board_id, {"type": "card_update", "card_id": guide_card_id, "status": "awaiting_user"})
+
+    detection = payload.get("detection", {})
+    if detection.get("type") != "manual":
+        task = asyncio.create_task(
+            _spawn_detection_watcher(
+                guide_card_id=guide_card_id,
+                parent_card_id=None,
+                detection=detection,
+                auto_retry=False,
+                board_id=board_id,
+            )
+        )
+        _runtime_watchers[guide_card_id] = task
+
+
+async def _spawn_detection_watcher(
+    guide_card_id: int,
+    parent_card_id: int,
+    detection: dict,
+    auto_retry: bool,
+    board_id: int,
+) -> None:
+    """detection 스펙에 따라 조건 충족을 폴링하고, 충족 시 guide 카드를 done으로 전환 후 부모 재실행."""
+    import httpx as _httpx
+    import time as _time
+    det_type = detection.get("type", "manual")
+    target = detection.get("target", "")
+    interval = max(1, detection.get("interval_sec", 3))
+    timeout = max(10, detection.get("timeout_sec", 600))
+    created_mtime = _time.time()
+    deadline = _time.time() + timeout
+
+    async def _mark_done():
+        db.update_card_status(guide_card_id, "done")
+        await _board_emit(board_id, {"type": "card_update", "card_id": guide_card_id, "status": "done"})
+        if auto_retry and parent_card_id:
+            await _run_artifact_inner(parent_card_id)
+
+    async def _mark_timeout():
+        db.append_card_output(guide_card_id, "\n\n---\n감지 시간 초과. 카드의 완료 버튼을 사용하세요.")
+        db.update_card_status(guide_card_id, "error")
+        await _board_emit(board_id, {"type": "card_update", "card_id": guide_card_id, "status": "error"})
+
+    try:
+        if det_type == "manual":
+            return  # 사용자 버튼 클릭으로 처리
+
+        while _time.time() < deadline:
+            await asyncio.sleep(interval)
+            try:
+                if det_type in ("cookie_file", "file_watch"):
+                    p = Path(target)
+                    if det_type == "cookie_file" and p.exists():
+                        await _mark_done()
+                        return
+                    if det_type == "file_watch" and p.exists() and p.stat().st_mtime > created_mtime:
+                        await _mark_done()
+                        return
+                elif det_type in ("url_probe", "http_probe"):
+                    async with _httpx.AsyncClient(timeout=5) as client:
+                        resp = await client.get(target)
+                        if resp.status_code == 200:
+                            expect = detection.get("expect", "")
+                            if not expect or expect in resp.text:
+                                await _mark_done()
+                                return
+            except asyncio.CancelledError:
+                return
+            except Exception:
+                pass
+
+        await _mark_timeout()
+    except asyncio.CancelledError:
+        pass
+    finally:
+        _runtime_watchers.pop(guide_card_id, None)
+
+
+def _extract_missing_package(stderr: str) -> "str | None":
+    """ImportError / ModuleNotFoundError stderr에서 패키지 이름을 추출."""
+    import re as _re
+    m = _re.search(r"No module named '([^']+)'", stderr)
+    if not m:
+        return None
+    module = m.group(1).split(".")[0]
+    # 표준 라이브러리는 설치하지 않음
+    _stdlib = {"os", "sys", "re", "json", "pathlib", "datetime", "time", "asyncio",
+               "threading", "subprocess", "collections", "itertools", "functools"}
+    if module in _stdlib:
+        return None
+    # 모듈명 → 패키지명 매핑 (일반 케이스)
+    _pkg_map = {"bs4": "beautifulsoup4", "cv2": "opencv-python", "PIL": "Pillow",
+                "sklearn": "scikit-learn", "yaml": "pyyaml", "dotenv": "python-dotenv"}
+    return _pkg_map.get(module, module)
+
+
+async def _try_diagnose_and_guide(card_id: int, stderr_tail: str, exit_code: int) -> None:
+    """카드 실패 후 LLM 진단 → runtime_guide 카드 spawn (카드당 1회 가드)."""
+    if _diagnose_counts.get(card_id, 0) >= 1:
+        return
+    _diagnose_counts[card_id] = _diagnose_counts.get(card_id, 0) + 1
+
+    card = db.get_card(card_id)
+    if not card:
+        return
+    board = db.get_board(card.get("board_id")) if card.get("board_id") else None
+    if not board:
+        return
+    board_id = board["id"]
+    project_path = card.get("artifact_cwd") or board.get("project_path") or ""
+
+    # 1) 휴리스틱 auto_fix 먼저 시도
+    try:
+        fix_result = await auto_fix_artifact(card_id)
+        if fix_result.get("ok"):
+            return  # 휴리스틱으로 해결됨
+    except Exception:
+        pass
+
+    # 2) LLM 진단
+    payload = await harness_diagnose_failure(
+        card_title=card.get("title", ""),
+        stderr_tail=stderr_tail,
+        exit_code=exit_code,
+        project_path=project_path,
+        board_context=board.get("description", ""),
+    )
+    if not payload:
+        return
+
+    # 3) dep_missing → pip install 자동 시도 후 재실행 (가이드 카드 불필요)
+    if payload.get("kind") == "dep_missing":
+        pkg = _extract_missing_package(stderr_tail)
+        if pkg:
+            await _board_emit(board_id, {"type": "status", "text": f"📦 패키지 자동 설치 중: {pkg}"})
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    "pip", "install", pkg,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                await proc.communicate()
+                if proc.returncode == 0:
+                    await _run_artifact_inner(card_id)
+                    return
+            except Exception:
+                pass
+
+    guide_card_id = db.create_runtime_guide_card(board_id, payload, parent_card_id=card_id)
+    await _board_emit(board_id, {"type": "card_update", "card_id": guide_card_id, "status": "awaiting_user"})
+
+    detection = payload.get("detection", {})
+    if detection.get("type") != "manual":
+        task = asyncio.create_task(
+            _spawn_detection_watcher(
+                guide_card_id=guide_card_id,
+                parent_card_id=card_id,
+                detection=detection,
+                auto_retry=payload.get("auto_retry_parent", True),
+                board_id=board_id,
+            )
+        )
+        _runtime_watchers[guide_card_id] = task
+
+
 async def _try_auto_answer(
     card_id: int, card: dict, output: str, board: dict, task: dict
 ):
@@ -2487,18 +2957,21 @@ async def set_project(board_id: int, body: dict):
 
 @app.post("/api/projects/create")
 async def create_project(body: dict):
-    """새 프로젝트 폴더 생성 후 경로 반환."""
-    name = body.get("name", "").strip()
-    if not name:
-        return {"error": "name 필수"}
-
+    """새 프로젝트 폴더 생성 후 경로 반환. name(이름) 또는 path(절대경로) 중 하나를 받는다."""
     import re as _re
-    safe = _re.sub(r"[^a-zA-Z0-9가-힣._-]", "-", name).strip("-")
-    if not safe:
-        return {"error": "유효하지 않은 이름"}
 
-    base = Path.home() / "Documents"
-    project_path = base / safe
+    path_raw = body.get("path", "").strip()
+    name_raw = body.get("name", "").strip()
+
+    if path_raw:
+        project_path = Path(path_raw).expanduser()
+    elif name_raw:
+        safe = _re.sub(r"[^a-zA-Z0-9가-힣._-]", "-", name_raw).strip("-")
+        if not safe:
+            return {"error": "유효하지 않은 이름"}
+        project_path = Path.home() / "Documents" / safe
+    else:
+        return {"error": "name 또는 path 필수"}
 
     if project_path.exists():
         return {"path": str(project_path), "existed": True}
@@ -2581,16 +3054,23 @@ async def _do_analyze(analyze_id: str, owner: str, repo: str, project_path):
         project_context = load_project_context(project_path) if project_path else ""
 
         system = (
-            "You are a senior software architect. Analyze the given repository and explain:\n"
-            "1. What it does and its key technical innovations\n"
-            "2. How it could be applied to or integrated with the current project\n"
-            "3. Concrete next steps to apply it (as actionable tasks)\n"
-            "Respond in Korean. Be concise and practical."
+            "You are a senior software architect reviewing a GitHub repository.\n"
+            "Start your response with EXACTLY this line (no other text before it):\n"
+            "VERDICT: recommended|risky|skip | SCORE: N/5 | WHY: 한 줄 이유\n\n"
+            "Verdict rules:\n"
+            "- recommended: useful and applicable to the project\n"
+            "- risky: interesting but needs caution (complexity, security, maintenance)\n"
+            "- skip: not relevant or not worth the effort\n\n"
+            "Then provide a Korean markdown analysis:\n"
+            "1. 무엇을 하는 프로젝트인가 (핵심 기능)\n"
+            "2. 현재 프로젝트에 어떻게 적용할 수 있는가\n"
+            "3. 구체적인 다음 단계 (적용할 경우)\n"
+            "Be concise and practical."
         )
 
         prompt = f"## 레포: {owner}/{repo}\n\n{summary}"
         if project_context:
-            prompt += f"\n\n{project_context}"
+            prompt += f"\n\n## 현재 프로젝트 컨텍스트\n{project_context}"
 
         chunks = []
 
@@ -2599,7 +3079,27 @@ async def _do_analyze(analyze_id: str, owner: str, repo: str, project_path):
             asyncio.ensure_future(emit({"type": "chunk", "text": c}))
 
         output, _, _err = await _run_claude(prompt=prompt, system_prompt=system, on_chunk=on_chunk)
-        await emit({"type": "done", "output": output, "repo_path": str(repo_path)})
+
+        # 첫 줄에서 verdict 파싱
+        first_line = output.split("\n")[0] if output else ""
+        structured = None
+        if first_line.startswith("VERDICT:"):
+            try:
+                parts = dict(p.strip().split(":", 1) for p in first_line.split("|") if ":" in p)
+                structured = {
+                    "verdict": parts.get("VERDICT", "skip").strip().lower(),
+                    "score": int(parts.get("SCORE", "3/5").split("/")[0].strip()),
+                    "why": parts.get("WHY", "").strip(),
+                }
+            except Exception:
+                pass
+
+        await emit({
+            "type": "done",
+            "output": output,
+            "repo_path": str(repo_path),
+            "structured": structured,
+        })
 
     except Exception as e:
         await emit({"type": "error", "text": str(e)})
@@ -2621,10 +3121,13 @@ async def ws_trending(ws: WebSocket, analyze_id: str):
 @app.post("/api/trending/apply")
 async def apply_trending(body: dict):
     """분석 결과를 보드로 변환."""
-    analysis     = body.get("analysis", "")
-    owner        = body.get("owner", "")
-    repo         = body.get("repo", "")
-    project_path = body.get("project_path") or None
+    analysis      = body.get("analysis", "")
+    owner         = body.get("owner", "")
+    repo          = body.get("repo", "")
+    project_path  = body.get("project_path") or None
+    approval_mode = body.get("approval_mode", "manual")
+    if approval_mode not in ("auto", "manual"):
+        approval_mode = "manual"
 
     if not analysis:
         return {"error": "analysis 필수"}
@@ -2633,7 +3136,7 @@ async def apply_trending(body: dict):
     board_id = db.create_board(
         name=f"{owner}/{repo} 적용",
         description=request,
-        approval_mode="manual",
+        approval_mode=approval_mode,
         project_path=project_path,
         status="generating",
     )

@@ -14,9 +14,13 @@ import {
   Play,
   TriangleRight,
   Loader2,
+  Plus,
+  Check,
+  X,
 } from "lucide-react";
 import { useBoards, useDeleteBoard } from "@/hooks/queries/use-boards";
 import { useProjects } from "@/hooks/queries/use-projects";
+import { api } from "@/api/client";
 import { useAgents, useSyncAgents } from "@/hooks/queries/use-agents";
 import { useSessions } from "@/hooks/queries/use-sessions";
 import { useScheduledBoards, usePauseSchedule, useResumeSchedule, useTriggerSchedule } from "@/hooks/queries/use-schedule";
@@ -38,9 +42,34 @@ export function Sidebar() {
     openHistoryDrawer,
   } = useUIStore();
 
+  const [showAddProject, setShowAddProject] = useState(false);
+  const [projectInput, setProjectInput] = useState("");
+  const [addingProject, setAddingProject] = useState(false);
+
   const { data: boards = [] } = useBoards();
   const { data: projects = [], refetch: refetchProjects, isFetching: fetchingProjects } = useProjects();
   const { mutate: deleteBoard } = useDeleteBoard();
+
+  const submitAddProject = async () => {
+    const v = projectInput.trim();
+    if (!v) return;
+    setAddingProject(true);
+    try {
+      const body = v.includes("/") || v.startsWith("~") ? { path: v } : { name: v };
+      const r: any = await api("/api/projects/create", {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+      if (r.path) setSelectedProject(r.path);
+      await refetchProjects();
+      setShowAddProject(false);
+      setProjectInput("");
+    } catch (e: any) {
+      alert(`오류: ${e.message}`);
+    } finally {
+      setAddingProject(false);
+    }
+  };
 
   const projectPaths = new Set(projects.map((p: any) => p.path));
   const filteredBoards = selectedProjectPath
@@ -48,21 +77,60 @@ export function Sidebar() {
     : boards.filter((b) => !b.project_path || !projectPaths.has(b.project_path));
 
   return (
-    <aside className="w-56 shrink-0 border-r border-gray-200 bg-white flex flex-col overflow-hidden">
+    <aside className="w-56 shrink-0 border-r border-gray-200 bg-white flex flex-col overflow-hidden h-full">
       {/* Project selector */}
       <div className="p-3 border-b border-gray-200">
         <div className="flex items-center justify-between mb-2 px-1">
           <span className="text-[10px] font-medium text-gray-500 uppercase tracking-wider">
             Project
           </span>
-          <button
-            onClick={() => refetchProjects()}
-            className="text-gray-500 hover:text-gray-900 transition-colors"
-            title="Refresh projects"
-          >
-            <RefreshCw size={10} className={fetchingProjects ? "animate-spin" : ""} />
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => { setShowAddProject((v) => !v); setProjectInput(""); }}
+              className="text-gray-500 hover:text-gray-900 transition-colors"
+              title="프로젝트 추가"
+            >
+              <Plus size={10} />
+            </button>
+            <button
+              onClick={() => refetchProjects()}
+              className="text-gray-500 hover:text-gray-900 transition-colors"
+              title="Refresh projects"
+            >
+              <RefreshCw size={10} className={fetchingProjects ? "animate-spin" : ""} />
+            </button>
+          </div>
         </div>
+        {showAddProject && (
+          <div className="flex items-center gap-1 mb-1">
+            <input
+              autoFocus
+              type="text"
+              value={projectInput}
+              onChange={(e) => setProjectInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") submitAddProject();
+                if (e.key === "Escape") { setShowAddProject(false); setProjectInput(""); }
+              }}
+              placeholder="이름 또는 ~/경로"
+              className="flex-1 h-6 text-[11px] px-1.5 rounded border border-gray-200 bg-gray-50 outline-none focus:border-indigo-400 min-w-0"
+              disabled={addingProject}
+            />
+            <button
+              onClick={submitAddProject}
+              disabled={addingProject || !projectInput.trim()}
+              className="text-indigo-600 hover:text-indigo-800 disabled:opacity-40 transition-colors"
+            >
+              {addingProject ? <Loader2 size={11} className="animate-spin" /> : <Check size={11} />}
+            </button>
+            <button
+              onClick={() => { setShowAddProject(false); setProjectInput(""); }}
+              className="text-gray-400 hover:text-gray-700 transition-colors"
+            >
+              <X size={11} />
+            </button>
+          </div>
+        )}
         <button
           onClick={() => setSelectedProject(null)}
           className={cn(
@@ -120,7 +188,7 @@ export function Sidebar() {
       </div>
 
       {/* Section content — 전체 단일 스크롤 */}
-      <div className="flex-1 overflow-y-auto min-h-0">
+      <div className="flex-1 overflow-y-auto min-h-0 bg-white">
         {sidebarSection === "boards" && (
           <>
             <BoardsSection

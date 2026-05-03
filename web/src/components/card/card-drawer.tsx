@@ -27,6 +27,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { ClarificationCard } from "@/components/board/clarification-card";
 import { EnvInputCard } from "@/components/board/env-input-card";
+import { RuntimeGuideCard } from "@/components/board/runtime-guide-card";
 import { ArtifactEnvForm } from "@/components/board/artifact-env-form";
 import type { Feedback } from "@/api/client";
 
@@ -174,9 +175,12 @@ export function CardDrawer() {
             {card?.card_kind === "env_input" && selectedBoardId && (
               <EnvInputCard card={card} boardId={selectedBoardId} />
             )}
+            {card?.card_kind === "runtime_guide" && selectedBoardId && (
+              <RuntimeGuideCard card={card} boardId={selectedBoardId} />
+            )}
 
             {/* 일반 출력 결과 */}
-            {card?.card_kind !== "clarification" && card?.card_kind !== "env_input" && (
+            {card?.card_kind !== "clarification" && card?.card_kind !== "env_input" && card?.card_kind !== "runtime_guide" && (
               <>
                 {output ? (
                   <div className="prose-output border border-gray-200 rounded-xl p-4 bg-white">

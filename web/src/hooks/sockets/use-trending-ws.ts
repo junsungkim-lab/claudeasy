@@ -1,10 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 import { wsUrl } from "@/api/client";
 
+export interface TrendingStructured {
+  verdict: "recommended" | "risky" | "skip";
+  score: number;
+  why: string;
+}
+
 export function useTrendingWs(analyzeId: string | null) {
   const [output, setOutput] = useState("");
   const [done, setDone] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [structured, setStructured] = useState<TrendingStructured | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
@@ -13,6 +20,7 @@ export function useTrendingWs(analyzeId: string | null) {
     setOutput("");
     setDone(false);
     setError(null);
+    setStructured(null);
 
     const ws = new WebSocket(wsUrl(`/ws/trending/${analyzeId}`));
     wsRef.current = ws;
@@ -23,6 +31,7 @@ export function useTrendingWs(analyzeId: string | null) {
         if (ev.type === "chunk") {
           setOutput((prev) => prev + ev.text);
         } else if (ev.type === "done") {
+          if (ev.structured) setStructured(ev.structured);
           setDone(true);
         } else if (ev.type === "error") {
           setError(ev.message ?? "분석 실패");
@@ -43,5 +52,5 @@ export function useTrendingWs(analyzeId: string | null) {
     };
   }, [analyzeId]);
 
-  return { output, done, error };
+  return { output, done, error, structured };
 }

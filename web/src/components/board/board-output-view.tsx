@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { Play, Square, ExternalLink, ArrowLeft, Terminal, Clock, RefreshCw, Folder, AlertTriangle, Plus, Trash2, Link, ListOrdered } from "lucide-react";
+import { Play, Square, ExternalLink, ArrowLeft, Terminal, Clock, RefreshCw, Folder, AlertTriangle, Plus, Trash2, Link, ListOrdered, Pencil, Check, X } from "lucide-react";
 import { useRuns, useRunCards } from "@/hooks/queries/use-runs";
 import { useBoards } from "@/hooks/queries/use-boards";
 import { useAutomation } from "@/hooks/queries/use-automation";
@@ -20,10 +20,14 @@ function _parseArtifactWarnings(output: string | null | undefined): string[] {
 
 function ArtifactRow({ card }: { card: Card }) {
   const [running, setRunning] = useState(false);
+  const [starting, setStarting] = useState(false);
   const [pid, setPid] = useState<number | null>(null);
   const [port, setPort] = useState<number | null>(null);
   const [envReady, setEnvReady] = useState(true);
   const [runError, setRunError] = useState<string | null>(null);
+  const [editingCmd, setEditingCmd] = useState(false);
+  const [cmdValue, setCmdValue] = useState(card.run_command ?? "");
+  const [savingCmd, setSavingCmd] = useState(false);
 
   const warnings = _parseArtifactWarnings(card.output);
 
@@ -49,10 +53,15 @@ function ArtifactRow({ card }: { card: Card }) {
           setPid(ev.pid ?? null);
           setPort(ev.port ?? null);
           setRunError(null);
+        } else if (ev.type === "artifact_completed") {
+          setRunning(false);
+          setPid(null);
+          if (ev.stdout) setScriptLog(ev.stdout);
         } else if (ev.type === "artifact_failed") {
           setRunning(false);
           setPid(null);
           setRunError(ev.stderr_tail || `종료 코드 ${ev.rc}`);
+          if (ev.stderr_tail) setScriptLog(ev.stderr_tail);
         } else if (ev.type === "artifact_stopped") {
           setRunning(false);
           setPid(null);
@@ -64,11 +73,18 @@ function ArtifactRow({ card }: { card: Card }) {
 
   const handleRun = useCallback(async () => {
     setRunError(null);
-    const res = await fetch(`/api/cards/${card.id}/run`, { method: "POST" });
-    const data = await res.json();
-    if (data.error) { setRunError(data.error); return; }
-    if (data.pid) { setRunning(true); setPid(data.pid); }
-    if (data.port) setPort(data.port);
+    setStarting(true);
+    try {
+      const res = await fetch(`/api/cards/${card.id}/run`, { method: "POST" });
+      const data = await res.json();
+      if (data.error) { setRunError(data.error); return; }
+      if (data.pid) { setRunning(true); setPid(data.pid); }
+      if (data.port) setPort(data.port);
+    } catch (e: any) {
+      setRunError(e?.message ?? "실행 요청 실패");
+    } finally {
+      setStarting(false);
+    }
   }, [card.id]);
 
   const handleStop = useCallback(async () => {
@@ -76,6 +92,47 @@ function ArtifactRow({ card }: { card: Card }) {
     setRunning(false);
     setPid(null);
     setPort(null);
+  }, [card.id]);
+
+  const [autoFixing, setAutoFixing] = useState(false);
+  const [fixMsg, setFixMsg] = useState<string | null>(null);
+  const [scriptLog, setScriptLog] = useState<string | null>(null);
+
+  const handleSaveCmd = useCallback(async () => {
+    if (!cmdValue.trim()) return;
+    setSavingCmd(true);
+    try {
+      const res = await fetch(`/api/cards/${card.id}/run-command`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ run_command: cmdValue.trim() }),
+      });
+      const data = await res.json();
+      if (data.ok) { setEditingCmd(false); setRunError(null); }
+    } catch {}
+    finally { setSavingCmd(false); }
+  }, [card.id, cmdValue]);
+
+  const handleAutoFix = useCallback(async () => {
+    setAutoFixing(true);
+    setRunError(null);
+    setFixMsg(null);
+    try {
+      const res = await fetch(`/api/cards/${card.id}/auto-fix`, { method: "POST" });
+      const data = await res.json();
+      if (data.error) { setRunError(data.error); return; }
+      if (data.ok) {
+        setCmdValue(data.fixed_cmd);
+        setFixMsg(data.fix_reason);
+        if (data.run?.pid) { setRunning(true); setPid(data.run.pid); }
+        if (data.run?.port) setPort(data.run.port);
+        if (data.run?.error) setRunError(data.run.error);
+      }
+    } catch (e: any) {
+      setRunError(e?.message ?? "자동 수정 실패");
+    } finally {
+      setAutoFixing(false);
+    }
   }, [card.id]);
 
   return (
@@ -108,10 +165,39 @@ function ArtifactRow({ card }: { card: Card }) {
 
       <ArtifactEnvForm cardId={card.id} onReadyChange={setEnvReady} onSaved={() => setEnvReady(true)} />
 
-      <div className="flex items-center gap-2 bg-gray-50 rounded-lg px-3 py-2">
-        <Terminal size={12} className="text-gray-400 shrink-0" />
-        <span className="text-[11px] font-mono text-gray-700 truncate">{card.run_command}</span>
-      </div>
+      {editingCmd ? (
+        <div className="flex items-center gap-1.5 bg-gray-50 rounded-lg px-3 py-1.5">
+          <Terminal size={12} className="text-gray-400 shrink-0" />
+          <input
+            className="flex-1 text-[11px] font-mono bg-transparent outline-none text-gray-900 min-w-0"
+            value={cmdValue}
+            onChange={(e) => setCmdValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") handleSaveCmd();
+              if (e.key === "Escape") { setEditingCmd(false); setCmdValue(card.run_command ?? ""); }
+            }}
+            autoFocus
+          />
+          <button onClick={handleSaveCmd} disabled={savingCmd} className="text-emerald-600 hover:text-emerald-700 shrink-0 p-0.5">
+            <Check size={13} />
+          </button>
+          <button onClick={() => { setEditingCmd(false); setCmdValue(card.run_command ?? ""); }} className="text-gray-400 hover:text-gray-600 shrink-0 p-0.5">
+            <X size={13} />
+          </button>
+        </div>
+      ) : (
+        <div className="flex items-center gap-2 bg-gray-50 rounded-lg px-3 py-2 group">
+          <Terminal size={12} className="text-gray-400 shrink-0" />
+          <span className="text-[11px] font-mono text-gray-700 truncate flex-1">{cmdValue}</span>
+          <button
+            onClick={() => setEditingCmd(true)}
+            className="opacity-0 group-hover:opacity-100 transition-opacity text-gray-400 hover:text-gray-700 shrink-0"
+            title="명령어 수정"
+          >
+            <Pencil size={11} />
+          </button>
+        </div>
+      )}
 
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
@@ -137,20 +223,62 @@ function ArtifactRow({ card }: { card: Card }) {
           <Button
             size="sm"
             onClick={handleRun}
-            disabled={!envReady}
+            disabled={!envReady || starting}
             title={!envReady ? "환경 변수를 먼저 설정해주세요" : undefined}
             className="h-7 px-3 text-[11px]"
           >
-            <Play size={11} />
-            {card.artifact_type === "server" ? "서버 실행" : "실행하기"}
+            {starting
+              ? <><span className="w-2 h-2 rounded-full bg-white animate-ping mr-1" />시작 중...</>
+              : <><Play size={11} />{card.artifact_type === "server" ? "서버 실행" : "실행하기"}</>
+            }
           </Button>
         )}
       </div>
 
+      {fixMsg && !runError && (
+        <div className="bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
+          <p className="text-[10px] text-emerald-700 font-medium">✓ 자동 수정 완료 — {fixMsg}</p>
+        </div>
+      )}
+
+      {running && (
+        <div className="bg-gray-900 rounded-lg px-3 py-2">
+          <p className="text-[10px] text-gray-400 mb-1 font-mono">실행 로그</p>
+          <p className="text-[10px] text-green-400 font-mono animate-pulse">● 실행 중...</p>
+        </div>
+      )}
+
+      {!running && scriptLog && (
+        <div className="bg-gray-900 rounded-lg px-3 py-2">
+          <p className="text-[10px] text-gray-400 mb-1.5 font-mono">실행 로그</p>
+          <pre className="text-[10px] text-green-300 font-mono whitespace-pre-wrap break-all max-h-48 overflow-y-auto">{scriptLog}</pre>
+        </div>
+      )}
+
       {runError && (
-        <div className="bg-red-50 border border-red-200 rounded-lg px-3 py-2 space-y-1">
-          <p className="text-[10px] font-semibold text-red-700">실행 실패</p>
-          <pre className="text-[10px] text-red-600 font-mono whitespace-pre-wrap break-all max-h-32 overflow-y-auto">{runError}</pre>
+        <div className="bg-red-50 border border-red-200 rounded-lg px-3 py-2 space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-[10px] font-semibold text-red-700">실행 실패</p>
+            <div className="flex items-center gap-1.5 shrink-0">
+              <button
+                onClick={handleAutoFix}
+                disabled={autoFixing}
+                className="flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-md bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-60 transition-colors font-medium"
+              >
+                {autoFixing
+                  ? <><span className="w-1.5 h-1.5 rounded-full bg-white animate-ping mr-0.5" />수정 중...</>
+                  : <>🔧 자동 수정 후 재실행</>
+                }
+              </button>
+              <button
+                onClick={() => { setEditingCmd(true); setRunError(null); }}
+                className="text-[10px] px-2 py-1 rounded-md bg-red-100 text-red-600 hover:bg-red-200 transition-colors"
+              >
+                직접 수정
+              </button>
+            </div>
+          </div>
+          <pre className="text-[10px] text-red-500 font-mono whitespace-pre-wrap break-all max-h-20 overflow-y-auto">{runError}</pre>
         </div>
       )}
     </div>
